@@ -5,7 +5,7 @@ use warnings;
 
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.004';
+  $App::GitGerrit::VERSION = '0.005';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -667,7 +667,7 @@ $Commands{reviewer} = sub {
     print "There are ", scalar(@reviewers), " reviewers currently:\n";
     foreach my $reviewer (@reviewers) {
         print "$reviewer->{name}\t$reviewer->{email}\t";
-        foreach my $approval (sort keys $reviewer->{approvals}) {
+        foreach my $approval (sort keys %{$reviewer->{approvals}}) {
             print "$approval:$reviewer->{approvals}{$approval}";
         } continue {
             print ", ";
@@ -836,7 +836,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.004
+version 0.005
 
 =head1 SYNOPSIS
 
