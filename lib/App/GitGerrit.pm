@@ -5,7 +5,7 @@ use warnings;
 
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.005';
+  $App::GitGerrit::VERSION = '0.006';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -169,10 +169,10 @@ host=$host
 path=$path
 EOF
 
-    if (my $username = config('username')) {
-        $description .= <<EOF
-username=$username
-EOF
+    if (my $userinfo = $baseurl->userinfo) {
+        my ($username, $password) = split /:/, $userinfo, 2;
+        $description .= "username=$username\n" if $username;
+        $description .= "password=$password\n" if $password;
     }
 
     return $description;
@@ -531,7 +531,7 @@ $Commands{config} = sub {
     cmd "git config --get-regexp \"^git-gerrit\\.\"";
 };
 
-$Commands{checkout} = sub {
+$Commands{checkout} = $Commands{co} = sub {
     get_options();
 
     my $id = shift @ARGV || current_change_id()
@@ -551,21 +551,24 @@ $Commands{checkout} = sub {
     cmd "git checkout $branch";
 };
 
-$Commands{backout} = sub {
-    get_options('keep');
+$Commands{upstream} = $Commands{up} = sub {
+    get_options(
+        'keep',
+        'delete',
+    );
 
     my $branch = current_branch;
 
     if (my ($upstream, $id) = change_branch_info($branch)) {
         if (cmd "git checkout $upstream") {
-            if ($id =~ /^\d+$/ && ! $Options{keep}) {
-                cmd "git branch -D $branch";
-            } else {
+            if ($Options{keep} || ! $Options{delete} && $id =~ /\D/) {
                 warn "Keeping $branch\n";
+            } else {
+                cmd "git branch -D $branch";
             }
         }
     } else {
-        die "backout: You aren't in a change branch. I cannot back you out.\n";
+        die "upstream: You aren't in a change branch. There is no upstream to go to.\n";
     }
 };
 
@@ -836,7 +839,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.005
+version 0.006
 
 =head1 SYNOPSIS
 
