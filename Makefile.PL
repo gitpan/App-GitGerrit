@@ -29,10 +29,11 @@ my %WriteMakefileArgs = (
     "File::Temp" => 0,
     "Gerrit::REST" => 0,
     "Getopt::Long" => 0,
-    "LWP::Simple" => 0,
     "Pod::Usage" => 0,
     "URI" => 0,
     "URI::Escape" => 0,
+    "locale" => 0,
+    "open" => 0,
     "strict" => 0,
     "utf8" => 0,
     "warnings" => 0
@@ -41,7 +42,7 @@ my %WriteMakefileArgs = (
     "Test::More" => 0,
     "lib" => 0
   },
-  "VERSION" => "0.006",
+  "VERSION" => "0.007",
   "test" => {
     "TESTS" => "t/*.t"
   }

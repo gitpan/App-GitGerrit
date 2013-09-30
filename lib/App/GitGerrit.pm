@@ -2,10 +2,12 @@ use utf8;
 use 5.010;
 use strict;
 use warnings;
+use locale ':not_characters';
+use open ':locale';
 
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.006';
+  $App::GitGerrit::VERSION = '0.007';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -156,35 +158,39 @@ sub install_commit_msg_hook {
 # get and set credentials for git commands and also for Gerrit REST
 # interactions.
 
-sub credential_description {
+sub credential_description_file {
+    my ($password) = @_;
+
     my $baseurl = config('baseurl');
 
-    my $protocol = $baseurl->scheme;
-    my $host     = $baseurl->host;
-    my $path     = $baseurl->path;
+    my %credential = (
+        protocol => $baseurl->scheme,
+        host     => $baseurl->host,
+        path     => $baseurl->path,
+        password => $password,
+    );
 
-    my $description = <<EOF;
-protocol=$protocol
-host=$host
-path=$path
-EOF
-
+    # Try to get the username from the baseurl
     if (my $userinfo = $baseurl->userinfo) {
         my ($username, $password) = split /:/, $userinfo, 2;
-        $description .= "username=$username\n" if $username;
-        $description .= "password=$password\n" if $password;
+        $credential{username} = $username;
     }
 
-    return $description;
+    require File::Temp;
+    my $fh = File::Temp->new();
+
+    while (my ($key, $value) = each %credential) {
+        $fh->print("$key=$value\n") if $value;
+    }
+
+    $fh->print("\n\n");
+    $fh->close();
+
+    return ($fh, $fh->filename);
 }
 
 sub get_credentials {
-    # Create a temporary file to hold the credential description
-    require File::Temp;
-    my ($fh, $credfile) = File::Temp::tempfile(UNLINK => 1);
-    $fh->print(credential_description(), "\n");
-    $fh->print("\n");
-    $fh->close;
+    my ($fh, $credfile) = credential_description_file;
 
     my %credentials;
     open my $pipe, '-|', "git credential fill <$credfile";
@@ -207,11 +213,9 @@ sub set_credentials {
     $what =~ /^(?:approve|reject)$/
         or die "set_credentials \$what argument ($what) must be either 'approve' or 'reject'\n";
 
-    open my $git, '|-', "git credential $what";
-    $git->print(credential_description(), "password=$password\n\n");
-    $git->close;
+    my ($fh, $credfile) = credential_description_file($password);
 
-    return;
+    return system("git credential $what <$credfile") == 0;
 }
 
 # The get_message routine returns the message argument to the
@@ -296,7 +300,7 @@ sub query_changes {
 
     push @queries, "n=$Options{limit}" if $Options{limit};
 
-    push @queries, "o=DETAILED_ACCOUNTS";
+    push @queries, "o=LABELS";
 
     my $changes = gerrit(GET => "/changes/?" . join('&', @queries));
     $changes = [$changes] if ref $changes->[0] eq 'HASH';
@@ -381,6 +385,28 @@ sub current_change_id {
     return $id;
 }
 
+# This routine receives the hash-ref mapped to the 'Code-Review' label
+# in a change's 'labels' key when it's fetched with the option
+# LABELS. For more information, please read:
+# https://gerrit-review.googlesource.com/Documentation/rest-api-changes.html#label-info
+
+sub code_review {
+    my ($cr) = @_;
+    if (! defined $cr) {
+        return '';
+    } elsif (exists $cr->{rejected}) {
+        return '-2';
+    } elsif (exists $cr->{disliked}) {
+        return '-1';
+    } elsif (exists $cr->{approved}) {
+        return '+2';
+    } elsif (exists $cr->{recommended}) {
+        return '+1';
+    } else {
+        return '';
+    }
+}
+
 ############################################################
 # MAIN
 
@@ -441,27 +467,39 @@ $Commands{query} = sub {
 
     my $changes = query_changes(@queries);
 
-    # FIXME: consider using Text::Table for formatting
-    my $format = "%-5s %-9s %-19s %-20s %-12s %-24s %s\n";
+    my $table = eval {require Text::Table}
+        ? Text::Table->new(qw/ID STATUS CR UPDATED PROJECT BRANCH OWNER SUBJECT/)
+        : undef;
+    state $format = "%-5s %-9s %2s %-19s %-20s %-12s %-24s %s\n";
+
     for (my $i=0; $i < @$changes; ++$i) {
         print "\n[$names[$i]=$queries[$i]]\n";
         next unless @{$changes->[$i]};
-        printf $format, 'ID', 'STATUS', 'UPDATED', 'PROJECT', 'BRANCH', 'OWNER', 'SUBJECT';
+        printf $format, qw/ID STATUS CR UPDATED PROJECT BRANCH OWNER SUBJECT/
+            unless $table;
         foreach my $change (sort {$b->{updated} cmp $a->{updated}} @{$changes->[$i]}) {
             if ($Options{verbose}) {
                 if (my $topic = gerrit(GET => "/changes/$change->{id}/topic")) {
                     $change->{branch} .= " ($topic)";
                 }
             }
-            printf $format,
+            my @values = (
                 $change->{_number},
                 $change->{status},
+                code_review($change->{labels}{'Code-Review'}),
                 substr($change->{updated}, 0, 19),
                 $change->{project},
                 $change->{branch},
                 substr($change->{owner}{name}, 0, 24),
-                $change->{subject};
+                $change->{subject},
+            );
+            if ($table) {
+                $table->add(@values);
+            } else {
+                printf $format, @values;
+            }
         }
+        print $table->table() if $table;
     }
     print "\n";
 };
@@ -495,7 +533,7 @@ $Commands{my} = sub {
 };
 
 $Commands{show} = sub {
-    get_options('verbose');
+    get_options();
 
     my $id = shift @ARGV || current_change_id()
         or pod2usage "show: Missing CHANGE.\n";
@@ -509,22 +547,41 @@ $Commands{show} = sub {
       Owner: $change->{owner}{name}
 EOF
 
-    if ($Options{verbose}) {
-        if (my $topic = gerrit(GET => "/changes/$id/topic")) {
-            $change->{topic} = $topic;
-        }
-    }
-
     for my $key (qw/project branch topic created updated status reviewed mergeable/) {
         printf "%12s %s\n", "\u$key:", $change->{$key}
             if exists $change->{$key};
     }
 
-    for my $label (sort keys %{$change->{permited_labels}}) {
-        for my $review (sort {$a->{name} cmp $b->{name}} @{$change->{labels}{$label}{all}}) {
-            printf "%12s %-32s %+2d\n", "$label:", @{$review}{qw/name value/};
+    print "\n";
+    # We want to produce a table in which the first column lists the
+    # reviewer names and the other columns have their votes for each
+    # label. However, the change object has this information
+    # inverted. So, we have to first collect all votes.
+    my @labels = sort keys %{$change->{labels}};
+    my %reviewers;
+    while (my ($label, $info) = each %{$change->{labels}}) {
+        foreach my $vote (@{$info->{all}}) {
+            $reviewers{$vote->{name}}{$label} = $vote->{value};
         }
     }
+
+    # And now we can output the vote table
+    my $table = eval {require Text::Table}
+        ? Text::Table->new('REVIEWER', map {"$_\n&num"} @labels)
+        : undef;
+
+    printf "%-32s %-s\n", 'REVIEWER', join("\t", @labels)
+        unless $table;
+
+    foreach my $name (sort keys %reviewers) {
+        my @votes = map {$_ > 0 ? "+$_" : $_} map {defined $_ ? $_ : '0'} @{$reviewers{$name}}{@labels};
+        if ($table) {
+            $table->add($name, @votes);
+        } else {
+            printf "%-32s %-s\n", substr($name, 0, 32), join("\t", @votes);
+        }
+    }
+    print $table->table() if $table;
 };
 
 $Commands{config} = sub {
@@ -570,6 +627,33 @@ $Commands{upstream} = $Commands{up} = sub {
     } else {
         die "upstream: You aren't in a change branch. There is no upstream to go to.\n";
     }
+};
+
+$Commands{'cherry-pick'} = $Commands{cp} = sub {
+    # The 'gerrit cherry-pick' sub-commands passes all of its options,
+    # but --debug, to 'git cherry-pick'.
+    Getopt::Long::Configure('pass_through');
+    get_options();
+
+    # Since we're passing through options, they're left at the start
+    # of @ARGV. So, we pop the change-id instead of shifting it.
+    my $id = pop @ARGV
+        or pod2usage "cherrypick: Missing CHANGE.\n";
+
+    # Make sure we haven't popped out an option.
+    $id !~ /^-/
+        or pod2usage "cherrypick: Missing CHANGE.\n";
+
+    my $change = get_change($id);
+
+    my ($revision) = values %{$change->{revisions}};
+
+    my ($url, $ref) = @{$revision->{fetch}{http}}{qw/url ref/};
+
+    cmd "git fetch $url $ref"
+        or die "cherrypick: can't git fetch $url $ref\n";
+
+    cmd join(' ', 'git cherry-pick', @ARGV, 'FETCH_HEAD');
 };
 
 $Commands{push} = sub {
@@ -785,7 +869,7 @@ $Commands{submit} = sub {
     );
 
     my @args;
-    push @args, { wait_for_merge => 1 } unless $Options{'no-wait-for-merge'};
+    push @args, { wait_for_merge => 'true' } unless $Options{'no-wait-for-merge'};
 
     if (my $id = shift @ARGV) {
         gerrit(POST => "/changes/$id/submit", @args);
@@ -839,7 +923,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.006
+version 0.007
 
 =head1 SYNOPSIS
 

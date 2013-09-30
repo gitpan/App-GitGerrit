@@ -35,15 +35,9 @@ An incomplete list of things to do in random order:
 
 =item * Test, test, test, ...
 
-=item * test on Windows
-
 =item * checkout CHANGE.patchsetNumber
 
 Allow for the checkout of a specific patchset of a change.
-
-=item * implement 'git gerrit cherrypick'
-
-From git-review.
 
 =item * implement 'git gerrit diff'
 
@@ -75,14 +69,6 @@ shortcuts.
 
 To checkout one or more changes associated with a Gerrit topic.
 
-=item * show votes with --verbose
-
-This should work on 'git gerrit show' and 'git gerrit query'.
-
-=item * better format the output of 'git gerrit query'
-
-I'm thinking about using Text::Table to do it.
-
 =item * 'git gerrit review --verbose'
 
 This should work like 'git commit --verbose' so that the diff should
@@ -97,6 +83,10 @@ user to insert comments below the diff lines. These comments would be
 recorded as draft comments associated with files or lines.
 
 This would be really cool.
+
+=item * implement 'git gerrit web [CHANGE]'
+
+To go to CHANGE's Gerrit web page in a browser.
 
 =back
 

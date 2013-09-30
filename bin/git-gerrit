@@ -23,27 +23,28 @@ git-gerrit - Git extension to implement a Gerrit workflow
 
 =head1 VERSION
 
-version 0.006
+version 0.007
 
 =head1 SYNOPSIS
 
-    git gerrit new      [--update] TOPIC [BRANCH]
-    git gerrit push     [--keep] [--force] [--update] [--rebase] [--draft]
-                        [--topic TOPIC] [--reviewer USER] [--cc USER]
+    git gerrit new         [--update] TOPIC [BRANCH]
+    git gerrit push        [--keep] [--force] [--rebase] [--draft]
+                           [--topic TOPIC] [--reviewer USER] [--cc USER]
 
-    git gerrit query    [--limit LIMIT] [--verbose] [[NAME=]QUERY]*
-    git gerrit my       [--limit LIMIT] [--verbose] [changes|drafts|watched|starred]
-    git gerrit show     [--verbose] [CHANGE]
+    git gerrit query       [--limit LIMIT] [--verbose] [[NAME=]QUERY]*
+    git gerrit my          [--limit LIMIT] [--verbose] [changes|drafts|watched|starred]
+    git gerrit show        [CHANGE]
 
-    git gerrit checkout|co [CHANGE]
-    git gerrit upstream|up [--keep]
+    git gerrit checkout    [CHANGE]
+    git gerrit upstream    [--keep]
+    git gerrit cherry-pick [OPTIONS]* CHANGE
 
-    git gerrit reviewer [--add USERS] [--confirm] [--delete USERS] [CHANGE]
-    git gerrit review   [--message TEXT] [--keep] [[LABEL]=VOTE]* [CHANGE]
-    git gerrit abandon  [--message TEXT] [--keep] [CHANGE]
-    git gerrit restore  [--message TEXT] [CHANGE]
-    git gerrit revert   [--message TEXT] [CHANGE]
-    git gerrit submit   [--no-wait-for-merge] [--keep] [CHANGE]
+    git gerrit reviewer    [--add USERS] [--confirm] [--delete USERS] [CHANGE]
+    git gerrit review      [--message TEXT] [--keep] [[LABEL]=VOTE]* [CHANGE]
+    git gerrit abandon     [--message TEXT] [--keep] [CHANGE]
+    git gerrit restore     [--message TEXT] [CHANGE]
+    git gerrit revert      [--message TEXT] [CHANGE]
+    git gerrit submit      [--no-wait-for-merge] [--keep] [CHANGE]
 
     git gerrit config
     git gerrit version
@@ -142,15 +143,15 @@ your Gerrit server.
 =head1 AUTHENTICATION
 
 Git-gerrit uses Git's credential management system via its
-L<git-credential(1)> command to obtain credentials for connecting to
+B<git-credential> command to obtain credentials for connecting to
 Gerrit. You can take advantage of this by configuring Git's
 C<credential.helper> variable to use a persistent credential storage
 and avoid being asked for the authentication credentials
-repeatedly. Please, read L<gitcredentials(7)> manpage to know how to
+repeatedly. Please, read B<gitcredentials> manpage to know how to
 configure this system.
 
-On Unix-like systems in general, the L<git-credential-cache(1)>
-command which comes with Git seems to be a good choice, as a balanced
+On Unix-like systems in general, the B<git-credential-cache> command
+which comes with Git seems to be a good choice, as a balanced
 compromise between convenience and security:
 
     git config --global credential.helper cache --timeout 3600
@@ -368,8 +369,9 @@ option more than once, to invite more than a set of users.
 
 The B<query> sub-command let's you list Gerrit changes meeting
 specific criteria. The matching changes are shown in tabular format,
-one change per line, listing their legacy ID, status, time of last
-update, project name, branch name, owner name, and subject line.
+one change per line, listing their legacy ID, status, Code-Review
+vote, time of last update, project name, branch name, owner name, and
+subject line.
 
 You may pass a list of queries. Each QUERY's results is presented
 separated from the other by a empty line and a header containing the
@@ -378,12 +380,12 @@ query's name and expression inside brackets. For example:
     $ git gerrit query 'Starred changes=is:starred' is:draft
 
     [Starred changes=is:starred]
-    ID    STATUS UPDATED    PROJECT    BRANCH OWNER          SUBJECT
-    1186  MERGED 2013-09-18 helloworld master Gustavo Chaves [SB-1] Test amend 3
+    ID    STATUS CR UPDATED    PROJECT    BRANCH OWNER          SUBJECT
+    1186  MERGED +2 2013-09-18 helloworld master Gustavo Chaves [SB-1] Test amend 3
 
     [QUERY=is:draft]
-    ID    STATUS UPDATED    PROJECT    BRANCH OWNER          SUBJECT
-    1187  NEW    2013-09-08 helloworld master Gustavo Chaves [SB-2] Make foo
+    ID    STATUS CR UPDATED    PROJECT    BRANCH OWNER          SUBJECT
+    1187  NEW       2013-09-08 helloworld master Gustavo Chaves [SB-2] Make foo
 
 Note that unnamed queries are prefixed by C<QUERY=> instead of by their names.
 
@@ -416,7 +418,7 @@ The C<changes> argument is used by default if you don't specify any.
 The options taken by the C<my> sub-command are passed to the C<query>
 sub-command.
 
-=head2 git gerrit show [--verbose] [CHANGE]
+=head2 git gerrit show [CHANGE]
 
 The B<show> sub-command describes a CHANGE in detail, showing much
 like what Gerrit shows in a change page of its web interface. For
@@ -436,15 +438,6 @@ example:
 If a CHANGE is not passed the branch associated with the current
 change-branch is described. If you're not in a change-branch, you'll
 get an error.
-
-=over
-
-=item B<--verbose>
-
-This option makes the change topic, if any, be shown too. This
-requires a separate REST call, making the result a bit slower.
-
-=back
 
 =head2 git gerrit checkout|co [CHANGE]
 
@@ -484,6 +477,17 @@ change. However, the <--keep> option has precedence, meaning that if
 both options are present the change-branch isn't deleted.
 
 =back
+
+=head2 git gerrit cherry-pick [OPTIONS]* CHANGE
+
+The B<cherry-pick> sub-command fetches CHANGE from Gerrit and applies
+it to the current branch using the C<git cherry-pick> command. The
+CHANGE id is required and every OPTION (but --debug) is passed as-is
+to the C<git cherry-pick> command. You should read B<git-cherry-pick>
+manpage to know what options are available. Some of the most usefull
+ones are these: B<-e>, B<-x>, and B<-n>.
+
+The shorter name C<cp> can also be used instead of C<cherry-pick>.
 
 =head2 git gerrit reviewer [--add USERS] [--confirm] [--delete USERS] [CHANGE]
 
@@ -675,9 +679,9 @@ Gerrit that you're using.
 =head1 COMMIT-MSG HOOK
 
 Gerrit provides a C<commit-msg> hook for Git that should be installed
-in your repositories. The purpose of it is to insert a C<Change-Id>
-footer in the commit messages so that Gerrit can discern independent
-commits from merely amended ones.
+in your repositories. Its purpose is to insert a C<Change-Id> footer
+in the commit messages so that Gerrit can discern independent commits
+from merely amended ones.
 
 Git-gerrit takes care of installing this hook for you. When you invoke
 its C<new> or C<push> sub-commands, it checks to see if your
