@@ -28,6 +28,7 @@ requires:
   Pod::Usage: 0
   URI: 0
   URI::Escape: 0
+  Win32: 0
   locale: 0
   open: 0
   perl: 5.010
@@ -38,4 +39,4 @@ resources:
   bugtracker: https://github.com/gnustavo/git-gerrit/issues
   homepage: http://search.cpan.org/dist/App-GitGerrit/
   repository: git://github.com/gnustavo/git-gerrit.git
-version: 0.007
+version: 0.008

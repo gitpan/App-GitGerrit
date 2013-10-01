@@ -3,11 +3,24 @@ use 5.010;
 use strict;
 use warnings;
 use locale ':not_characters';
-use open ':locale';
+
+# The following incantation is here to avoid this bug:
+# https://rt.perl.org/rt3/Public/Bug/Display.html?id=63402
+my $encoding;
+BEGIN {
+    if ($^O eq 'MSWin32') {
+	require Win32;
+	my $cp = Win32::GetConsoleCP();
+	$encoding = ":encoding(cp$cp)";
+    } else {
+	$encoding = ':locale';
+    }
+}
+use open ':std', $encoding;
 
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.007';
+  $App::GitGerrit::VERSION = '0.008';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -745,7 +758,7 @@ $Commands{reviewer} = sub {
     if (my $users = $Options{add}) {
         my $confirm = $Options{confirm} ? 'true' : 'false';
         foreach my $user (split(/,/, join(',', @$users))) {
-            gerrit(POST => "/changes/$id/reviewers/$user", { reviewer => $user, confirm => $confirm});
+            gerrit(POST => "/changes/$id/reviewers", { reviewer => $user, confirm => $confirm});
         }
     }
 
@@ -923,7 +936,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.007
+version 0.008
 
 =head1 SYNOPSIS
 
