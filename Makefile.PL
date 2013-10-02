@@ -32,7 +32,6 @@ my %WriteMakefileArgs = (
     "Pod::Usage" => 0,
     "URI" => 0,
     "URI::Escape" => 0,
-    "Win32" => 0,
     "locale" => 0,
     "open" => 0,
     "strict" => 0,
@@ -43,7 +42,7 @@ my %WriteMakefileArgs = (
     "Test::More" => 0,
     "lib" => 0
   },
-  "VERSION" => "0.008",
+  "VERSION" => "0.009",
   "test" => {
     "TESTS" => "t/*.t"
   }

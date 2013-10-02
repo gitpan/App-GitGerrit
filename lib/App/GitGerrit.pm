@@ -20,7 +20,7 @@ use open ':std', $encoding;
 
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.008';
+  $App::GitGerrit::VERSION = '0.009';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -936,7 +936,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.008
+version 0.009
 
 =head1 SYNOPSIS
 
