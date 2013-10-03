@@ -16,6 +16,8 @@ meta-spec:
 name: App-GitGerrit
 recommends:
   LWP::Simple: 0
+  Net::Netrc: 0
+  Term::Prompt: 0
   Text::Table: 0
 requires:
   Data::Dumper: 0
@@ -38,4 +40,4 @@ resources:
   bugtracker: https://github.com/gnustavo/git-gerrit/issues
   homepage: http://search.cpan.org/dist/App-GitGerrit/
   repository: git://github.com/gnustavo/git-gerrit.git
-version: 0.009
+version: 0.010

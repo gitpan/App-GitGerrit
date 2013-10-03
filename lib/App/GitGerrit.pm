@@ -18,9 +18,10 @@ BEGIN {
 }
 use open ':std', $encoding;
 
+$App::GitGerrit::VERSION = 'unreleased';
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.009';
+  $App::GitGerrit::VERSION = '0.010';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -117,9 +118,6 @@ EOF
     }
 
     $Config{baseurl}[-1] =~ s:/+$::; # trim trailing slashes from the baseurl
-
-    push @{$Config{url}}, URI->new($Config{baseurl}[-1] . '/' . $Config{project}[-1]);
-
     $Config{baseurl}[-1] = URI->new($Config{baseurl}[-1]);
 
     chomp(my $gitdir = qx/git rev-parse --git-dir/);
@@ -171,6 +169,15 @@ sub install_commit_msg_hook {
 # get and set credentials for git commands and also for Gerrit REST
 # interactions.
 
+sub url_userinfo {
+    my ($url) = @_;
+    if (my $userinfo = $url->userinfo) {
+        return split /:/, $userinfo, 2;
+    } else {
+        return (undef, undef);
+    }
+}
+
 sub credential_description_file {
     my ($password) = @_;
 
@@ -184,10 +191,8 @@ sub credential_description_file {
     );
 
     # Try to get the username from the baseurl
-    if (my $userinfo = $baseurl->userinfo) {
-        my ($username, $password) = split /:/, $userinfo, 2;
-        $credential{username} = $username;
-    }
+    my ($username) = url_userinfo($baseurl);
+    $credential{username} = $username if $username;
 
     require File::Temp;
     my $fh = File::Temp->new();
@@ -202,26 +207,70 @@ sub credential_description_file {
     return ($fh, $fh->filename);
 }
 
+my $git_credential_supported = 1;
 sub get_credentials {
     my ($fh, $credfile) = credential_description_file;
 
     my %credentials;
-    open my $pipe, '-|', "git credential fill <$credfile";
+    warn "DEBUG: try to get credentials from git-credential\n" if $Options{debug};
+    open my $pipe, '-|', "git credential fill <$credfile"
+        or die "Can't open pipe to git-credential: $!";
     while (<$pipe>) {
         chomp;
         $credentials{$1} = $2 if /^([^=]+)=(.*)/;
     }
-    close $pipe;
+    unless (close $pipe) {
+        die "Can't close pipe to git-credential: $!" if $!;
 
-    for my $key (qw/username password/) {
-        exists $credentials{$key} or die "Couldn't get credential's $key\n";
+        # If we get here it is because the shell invoked by open
+        # above couldn't exec git-credential, which most probably
+        # means that we're using a pre-1.8 Git, which doesn't
+        # support git-credential yet.
+        $git_credential_supported = 0;
     }
 
-    return @credentials{qw/username password/};
+    my ($username, $password) = @credentials{qw/username password/};
+
+    unless (defined $username && defined $password) {
+        # Let's try to grok credentials from the Gerrit baseurl next.
+        warn "DEBUG: try to get credentials from git-gerrit.baseurl\n" if $Options{debug};
+        ($username, $password) = url_userinfo(scalar(config('baseurl')));
+    }
+
+    unless (defined $username && defined $password) {
+        # Let's try grok them from a .netrc file next.
+        warn "DEBUG: try to get credentials from a .netrc file\n" if $Options{debug};
+        if (eval {require Net::Netrc}) {
+            if (my $mach = Net::Netrc->lookup(config('baseurl')->host, $username)) {
+                ($username, $password) = ($mach->login, $mach->password);
+            }
+        } else {
+            warn "DEBUG: failed to require Net::Netrc\n" if $Options{debug}
+        }
+    }
+
+    unless (defined $username && defined $password) {
+        # Let's try to prompt the user for the credentials.
+        warn "DEBUG: prompt the user for the credentials\n" if $Options{debug};
+        if (eval {require Term::Prompt}) {
+            $username = Term::Prompt::prompt('x', 'Gerrit username: ', '', $ENV{USER});
+            $password = Term::Prompt::prompt('p', 'Gerrit password: ', '');
+            print "\n";
+        } else {
+            warn "DEBUG: failed to require Term::Prompt\n" if $Options{debug}
+        }
+    }
+
+    die "Couldn't ger credential's username\n" unless defined $username;
+    die "Couldn't ger credential's password\n" unless defined $password;
+
+    return ($username, $password);
 }
 
 sub set_credentials {
     my ($username, $password, $what) = @_;
+
+    return 1 unless $git_credential_supported;
 
     $what =~ /^(?:approve|reject)$/
         or die "set_credentials \$what argument ($what) must be either 'approve' or 'reject'\n";
@@ -560,6 +609,11 @@ $Commands{show} = sub {
       Owner: $change->{owner}{name}
 EOF
 
+    for my $date (qw/created updated/) {
+        # Remove trailing zeroes from the dates
+        $change->{$date} =~ s/\.0+$// if exists $change->{$date};
+    }
+
     for my $key (qw/project branch topic created updated status reviewed mergeable/) {
         printf "%12s %s\n", "\u$key:", $change->{$key}
             if exists $change->{$key};
@@ -670,10 +724,11 @@ $Commands{'cherry-pick'} = $Commands{cp} = sub {
 };
 
 $Commands{push} = sub {
+    $Options{rebase} = '';      # false by default
     get_options(
         'keep',
         'force',
-        'rebase',
+        'rebase!',
         'draft',
         'topic=s',
         'reviewer=s@',
@@ -701,10 +756,12 @@ push: you have more than one commit that you are about to push.
 EOF
     }
 
-    if ($Options{rebase} || $id =~ /\D/) {
+    # A --noverbose option sets $Options{rebase} to '0'.
+    if ($Options{rebase} || $Options{rebase} eq '' && $id =~ /\D/) {
         update_branch($upstream)
             or die "push: Non-fast-forward pull. Please, merge or rebase your branch first.\n";
-        cmd "git rebase $upstream";
+        cmd "git rebase $upstream"
+            or die "push: please resolve this 'git rebase $upstream' and try again.\n";
     }
 
     my $refspec = 'HEAD:refs/' . ($Options{draft} ? 'draft' : 'for') . "/$upstream";
@@ -901,10 +958,11 @@ $Commands{submit} = sub {
 };
 
 $Commands{version} = sub {
+    print "Perl version $^V\n";
     print "git-gerrit version $App::GitGerrit::VERSION\n";
     cmd "git version";
     my $version = eval { gerrit(GET => '/config/server/version') };
-    $version //= "pre-2.7, since it doesn't support the Get Version REST Endpoint";
+    $version //= "unknown (Certainly pre-2.7, since it doesn't support the 'Get Version' REST Endpoint.)";
     print "Gerrit version $version\n";
 };
 
@@ -936,7 +994,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.009
+version 0.010
 
 =head1 SYNOPSIS
 
