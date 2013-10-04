@@ -21,7 +21,7 @@ use open ':std', $encoding;
 $App::GitGerrit::VERSION = 'unreleased';
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.010';
+  $App::GitGerrit::VERSION = '0.011';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -36,15 +36,36 @@ use Exporter 'import';
 our @EXPORT_OK = qw/run/;
 
 # The %Options hash is used to hold the command line options passed to
-# all git-gerrit subcommands. The --verbose option is common to all of
+# all git-gerrit subcommands. The --debug option is common to all of
 # them. Each subcommand supports a specific set of options which are
 # grokked by the get_options routine below.
 
-my %Options = ( debug => 0 );
+my %Options = ( debug => 0, help => 0 );
+
+sub debug {
+    my ($msg) = @_;
+    warn 'git-gerrit[DEBUG]: ', $msg, "\n" if $Options{debug};
+}
+
+sub info {
+    my ($msg) = @_;
+    warn 'git-gerrit[INFO]: ', $msg, "\n";
+}
+
+sub error {
+    my ($msg) = @_;
+    die 'git-gerrit[ERROR]: ', $msg, "\n";
+}
+
+sub syntax_error {
+    my ($msg) = @_;
+    pod2usage "git-gerrit[SYNTAX]: $msg\n";
+}
+
 sub get_options {
     my (@opt_specs) = @_;
-    return GetOptions(\%Options, 'debug', @opt_specs)
-        or pod2usage(2);
+    GetOptions(\%Options, 'debug', 'help', @opt_specs) or pod2usage(2);
+    pod2usage({-exitval => 1, -verbose => 2}) if $Options{help};
 }
 
 # The cmd routine is used to invoke shell commands, usually git. It
@@ -52,86 +73,86 @@ sub get_options {
 
 sub cmd {
     my ($cmd) = @_;
-    warn "CMD: $cmd\n" if $Options{debug};
+    debug $cmd;
     return system($cmd) == 0;
 }
 
-# The %Config hash holds the git-gerrit section configuration options.
+# The grok_config routine returns a hash-ref mapping every Git
+# configuration variable under the 'git-gerrit' section to its list of
+# values.
 
-my %Config;
 sub grok_config {
-    warn "CMD: git config --get-regexp \"^git-gerrit\\.\"\n"
-        if $Options{debug};
+    my %config;
+
+    debug "git config --get-regexp \"^git-gerrit\\.\"";
     {
         open my $pipe, '-|', 'git config --get-regexp "^git-gerrit\."';
         while (<$pipe>) {
             if (/^git-gerrit\.(\S+)\s+(.*)/) {
-                push @{$Config{$1}}, $2;
+                push @{$config{$1}}, $2;
             } else {
-                warn "Strange git-config output: $_";
+                info "Strange git-config output: $_";
             }
         }
     }
 
     # Override option defaults
     for my $opt (qw/verbose/) {
-        $Options{$opt} = $Config{"default-$opt"}[-1]
-            if exists $Config{"default-$opt"};
+        $Options{$opt} = $config{"default-$opt"}[-1]
+            if exists $config{"default-$opt"};
     }
 
-    unless ($Config{baseurl} && $Config{project} && $Config{remote}) {
-        warn <<EOF;
+    unless ($config{baseurl} && $config{project} && $config{remote}) {
+        info "Missing required configuration:";
 
-*** Please configure git-gerrit:
+        warn <<EOF unless $config{baseurl};
 
-EOF
-
-        warn <<EOF unless $Config{baseurl};
-Run
+Set your Gerrit server base URL like this. Omit --global if you only
+want to configure it for this particular repository.
 
     git config --global git-gerrit.baseurl "https://your.gerrit.domain"
-
-to set your Gerrit server base URL. Omit --global if you only want to
-configure it for this particular repository.
-
 EOF
 
-        warn <<EOF unless $Config{project};
-Run
+        warn <<EOF unless $config{project};
 
-    git config git-gerrit.project "gerrit/project/name"
+Set the Gerrit project associated with your repository like this.
 
-to set the Gerrit project your repository is associated with.
-
+    git config git-gerrit.project "project/name"
 EOF
 
-        warn <<EOF unless $Config{remote};
-Run
+        warn <<EOF unless $config{remote};
+
+Set the git remote pointing to the Gerrit project like this.
 
     git config git-gerrit.remote "remote"
-
-to set the git remote pointing to the Gerrit project.
-
 EOF
 
-        die;
+        die "\n\n";
     }
 
-    $Config{baseurl}[-1] =~ s:/+$::; # trim trailing slashes from the baseurl
-    $Config{baseurl}[-1] = URI->new($Config{baseurl}[-1]);
+    $config{baseurl}[-1] =~ s:/+$::; # trim trailing slashes from the baseurl
+    $config{baseurl}[-1] = URI->new($config{baseurl}[-1]);
 
     chomp(my $gitdir = qx/git rev-parse --git-dir/);
-    push @{$Config{gitdir}}, $gitdir;
+    push @{$config{gitdir}}, $gitdir;
 
-    return;
+    return \%config;
 }
+
+# The config routine returns the value(s) associated with Git's
+# git-gerrit.$var configuration variable. In list context it returns
+# the list of all values or the empty list if the variable isn't
+# defined. In scalar context it returns the variables last set value
+# (as output by the 'git config -l' command) or undef if the variable
+# isn't defined.
 
 sub config {
     my ($var) = @_;
+    state $config = grok_config;
     if (wantarray) {
-        return exists $Config{$var} ? @{$Config{$var}}  : ();
+        return exists $config->{$var} ? @{$config->{$var}}  : ();
     } else {
-        return exists $Config{$var} ? $Config{$var}[-1] : undef;
+        return exists $config->{$var} ? $config->{$var}[-1] : undef;
     }
 }
 
@@ -155,10 +176,9 @@ sub install_commit_msg_hook {
     # Try to download and install the hook.
     eval { require LWP::Simple };
     if ($@) {
-        warn "LWP: cannot install commit_msg hook because couldn't require LWP::Simple\n"
-            if $Options{debug};
+        info "Cannot install commit_msg hook because you don't have LWP::Simple installed";
     } else {
-        warn "LWP: install commit_msg hook\n" if $Options{debug};
+        info "Installing commit_msg hook";
         if (LWP::Simple::is_success(LWP::Simple::getstore(config('baseurl') . "/tools/hooks/commit-msg", $commit_msg))) {
             chmod 0755, $commit_msg;
         }
@@ -212,15 +232,15 @@ sub get_credentials {
     my ($fh, $credfile) = credential_description_file;
 
     my %credentials;
-    warn "DEBUG: try to get credentials from git-credential\n" if $Options{debug};
+    debug "Try to get credentials from git-credential";
     open my $pipe, '-|', "git credential fill <$credfile"
-        or die "Can't open pipe to git-credential: $!";
+        or error "Can't open pipe to git-credential: $!";
     while (<$pipe>) {
         chomp;
         $credentials{$1} = $2 if /^([^=]+)=(.*)/;
     }
     unless (close $pipe) {
-        die "Can't close pipe to git-credential: $!" if $!;
+        error "Can't close pipe to git-credential: $!" if $!;
 
         # If we get here it is because the shell invoked by open
         # above couldn't exec git-credential, which most probably
@@ -232,37 +252,34 @@ sub get_credentials {
     my ($username, $password) = @credentials{qw/username password/};
 
     unless (defined $username && defined $password) {
-        # Let's try to grok credentials from the Gerrit baseurl next.
-        warn "DEBUG: try to get credentials from git-gerrit.baseurl\n" if $Options{debug};
+        debug "Try to get credentials from git-gerrit.baseurl";
         ($username, $password) = url_userinfo(scalar(config('baseurl')));
     }
 
     unless (defined $username && defined $password) {
-        # Let's try grok them from a .netrc file next.
-        warn "DEBUG: try to get credentials from a .netrc file\n" if $Options{debug};
+        debug "Try to get credentials from a .netrc file";
         if (eval {require Net::Netrc}) {
             if (my $mach = Net::Netrc->lookup(config('baseurl')->host, $username)) {
                 ($username, $password) = ($mach->login, $mach->password);
             }
         } else {
-            warn "DEBUG: failed to require Net::Netrc\n" if $Options{debug}
+            debug "Failed to require Net::Netrc";
         }
     }
 
     unless (defined $username && defined $password) {
-        # Let's try to prompt the user for the credentials.
-        warn "DEBUG: prompt the user for the credentials\n" if $Options{debug};
+        debug "Prompt the user for the credentials";
         if (eval {require Term::Prompt}) {
             $username = Term::Prompt::prompt('x', 'Gerrit username: ', '', $ENV{USER});
             $password = Term::Prompt::prompt('p', 'Gerrit password: ', '');
             print "\n";
         } else {
-            warn "DEBUG: failed to require Term::Prompt\n" if $Options{debug}
+            debug "Failed to require Term::Prompt";
         }
     }
 
-    die "Couldn't ger credential's username\n" unless defined $username;
-    die "Couldn't ger credential's password\n" unless defined $password;
+    defined $username or error "Couldn't get credential's username";
+    defined $password or error "Couldn't get credential's password";
 
     return ($username, $password);
 }
@@ -273,7 +290,7 @@ sub set_credentials {
     return 1 unless $git_credential_supported;
 
     $what =~ /^(?:approve|reject)$/
-        or die "set_credentials \$what argument ($what) must be either 'approve' or 'reject'\n";
+        or error "set_credentials \$what argument ($what) must be either 'approve' or 'reject'";
 
     my ($fh, $credfile) = credential_description_file($password);
 
@@ -289,7 +306,7 @@ sub get_message {
 
     chomp(my $editor = qx/git var GIT_EDITOR/);
 
-    die "Please, see 'git help var' to see how to set up an editor for git messages.\n"
+    error "Please, read 'git help var' to know how to set up an editor for git messages."
         unless $editor;
 
     require File::Temp;
@@ -303,7 +320,7 @@ sub get_message {
 EOF
 
     cmd "$editor $tmp"
-        or die "Aborting because I couldn't invoke '$editor $tmp'.\n";
+        or error "Aborting because I couldn't invoke '$editor $tmp'.";
 
     my $message = File::Slurp::read_file($tmp->filename);
 
@@ -326,7 +343,7 @@ sub gerrit {
         eval { $gerrit->GET("/projects/" . uri_escape_utf8(config('project'))) };
         if ($@) {
             set_credentials($username, $password, 'reject');
-            die $@;
+            error $@;
         } else {
             set_credentials($username, $password, 'approve');
         }
@@ -334,7 +351,7 @@ sub gerrit {
 
     if ($Options{debug}) {
         my ($endpoint, @args) = @_;
-        warn "GERRIT: $method $endpoint\n";
+        debug "GERRIT->$method($endpoint)";
         if (@args) {
             require Data::Dumper;
             warn Data::Dumper::Dumper(@args);
@@ -411,7 +428,7 @@ sub update_branch {
 
 sub change_branch_new {
     my ($upstream, $topic) = @_;
-    die "The TOPIC cannot contain the slash character (/).\n"
+    error "The TOPIC cannot contain the slash character (/)."
         if $topic =~ m:/:;
     return "change/$upstream/$topic";
 }
@@ -481,33 +498,35 @@ $Commands{new} = sub {
     get_options('update');
 
     my $topic = shift @ARGV
-        or pod2usage "new: Missing TOPIC.\n";
+        or syntax_error "new: Missing TOPIC.";
 
     $topic !~ m:/:
-        or die "new: the topic name ($topic) should not contain slashes.\n";
+        or error "new: the topic name ($topic) should not contain slashes.";
 
     $topic =~ m:\D:
-        or die "new: the topic name ($topic) should contain at least one non-digit character.\n";
+        or error "new: the topic name ($topic) should contain at least one non-digit character.";
 
     my $branch = shift @ARGV || current_branch;
 
     if (my ($upstream, $id) = change_branch_info($branch)) {
-        die "new: You can't base a new change on a change branch ($branch).\n";
+        error "new: You can't base a new change on a change branch ($branch).";
     }
 
     my $status = qx/git status --porcelain --untracked-files=no/;
 
-    warn "Warning: git-status tells me that your working area is dirty:\n$status\n"
-        if $status ne '';
+    info "Warning: git-status tells me that your working area is dirty:\n$status\n"
+        if length $status;
 
     if ($Options{update}) {
         update_branch($branch)
-            or die "new: Non-fast-forward pull. Please, merge or rebase your branch first.\n";
+            or error "new: Non-fast-forward pull. Please, merge or rebase your branch first.";
     }
 
     cmd "git checkout -b change/$branch/$topic $branch";
 
     install_commit_msg_hook;
+
+    return;
 };
 
 $Commands{query} = sub {
@@ -564,6 +583,8 @@ $Commands{query} = sub {
         print $table->table() if $table;
     }
     print "\n";
+
+    return;
 };
 
 my %StandardQueries = (
@@ -584,7 +605,7 @@ $Commands{my} = sub {
             # By default we show 'My Changes'
             push @ARGV, @{$StandardQueries{changes}};
         } else {
-            pod2usage "my: Invalid change specification: '$ARGV[-1]'";
+            syntax_error "my: Invalid change specification: '$ARGV[-1]'";
         }
     } else {
         # By default we show 'My Changes'
@@ -592,13 +613,15 @@ $Commands{my} = sub {
     }
 
     $Commands{query}();
+
+    return;
 };
 
 $Commands{show} = sub {
     get_options();
 
     my $id = shift @ARGV || current_change_id()
-        or pod2usage "show: Missing CHANGE.\n";
+        or syntax_error "show: Missing CHANGE.";
 
     my $change = gerrit(GET => "/changes/$id/detail");
 
@@ -649,17 +672,21 @@ EOF
         }
     }
     print $table->table() if $table;
+
+    return;
 };
 
 $Commands{config} = sub {
     cmd "git config --get-regexp \"^git-gerrit\\.\"";
+
+    return;
 };
 
 $Commands{checkout} = $Commands{co} = sub {
     get_options();
 
     my $id = shift @ARGV || current_change_id()
-        or pod2usage "checkout: Missing CHANGE.\n";
+        or syntax_error "checkout: Missing CHANGE.";
 
     my $change = get_change($id);
 
@@ -670,9 +697,11 @@ $Commands{checkout} = $Commands{co} = sub {
     my $branch = "change/$change->{branch}/$change->{_number}";
 
     cmd "git fetch $url $ref:$branch"
-        or die "Can't fetch $url\n";
+        or error "Can't fetch $url";
 
     cmd "git checkout $branch";
+
+    return;
 };
 
 $Commands{upstream} = $Commands{up} = sub {
@@ -686,14 +715,16 @@ $Commands{upstream} = $Commands{up} = sub {
     if (my ($upstream, $id) = change_branch_info($branch)) {
         if (cmd "git checkout $upstream") {
             if ($Options{keep} || ! $Options{delete} && $id =~ /\D/) {
-                warn "Keeping $branch\n";
+                info "Keeping $branch";
             } else {
                 cmd "git branch -D $branch";
             }
         }
     } else {
-        die "upstream: You aren't in a change branch. There is no upstream to go to.\n";
+        error "upstream: You aren't in a change branch. There is no upstream to go to.";
     }
+
+    return;
 };
 
 $Commands{'cherry-pick'} = $Commands{cp} = sub {
@@ -705,11 +736,11 @@ $Commands{'cherry-pick'} = $Commands{cp} = sub {
     # Since we're passing through options, they're left at the start
     # of @ARGV. So, we pop the change-id instead of shifting it.
     my $id = pop @ARGV
-        or pod2usage "cherrypick: Missing CHANGE.\n";
+        or syntax_error "cherry-pick: Missing CHANGE.";
 
     # Make sure we haven't popped out an option.
     $id !~ /^-/
-        or pod2usage "cherrypick: Missing CHANGE.\n";
+        or syntax_error "cherry-pick: Missing CHANGE.";
 
     my $change = get_change($id);
 
@@ -718,9 +749,11 @@ $Commands{'cherry-pick'} = $Commands{cp} = sub {
     my ($url, $ref) = @{$revision->{fetch}{http}}{qw/url ref/};
 
     cmd "git fetch $url $ref"
-        or die "cherrypick: can't git fetch $url $ref\n";
+        or error "cherry-pick: can't git fetch $url $ref";
 
     cmd join(' ', 'git cherry-pick', @ARGV, 'FETCH_HEAD');
+
+    return;
 };
 
 $Commands{push} = sub {
@@ -736,18 +769,18 @@ $Commands{push} = sub {
     );
 
     qx/git status --porcelain --untracked-files=no/ eq ''
-        or die "push: Can't push change because git-status is dirty\n";
+        or error "push: Can't push change because git-status is dirty";
 
     my $branch = current_branch;
 
     my ($upstream, $id) = change_branch_info($branch)
-        or die "push: You aren't in a change branch. I cannot push it.\n";
+        or error "push: You aren't in a change branch. I cannot push it.";
 
     my @commits = qx/git log --decorate=no --oneline HEAD ^$upstream/;
     if (@commits == 0) {
-        die "push: no changes between $upstream and $branch. Pushing would be pointless.\n";
+        error "push: no changes between $upstream and $branch. Pushing would be pointless.";
     } elsif (@commits > 1 && ! $Options{force}) {
-        die <<EOF;
+        error <<EOF;
 push: you have more than one commit that you are about to push.
       The outstanding commits are:
 
@@ -759,9 +792,9 @@ EOF
     # A --noverbose option sets $Options{rebase} to '0'.
     if ($Options{rebase} || $Options{rebase} eq '' && $id =~ /\D/) {
         update_branch($upstream)
-            or die "push: Non-fast-forward pull. Please, merge or rebase your branch first.\n";
+            or error "push: Non-fast-forward pull. Please, merge or rebase your branch first.";
         cmd "git rebase $upstream"
-            or die "push: please resolve this 'git rebase $upstream' and try again.\n";
+            or error "push: please resolve this 'git rebase $upstream' and try again.";
     }
 
     my $refspec = 'HEAD:refs/' . ($Options{draft} ? 'draft' : 'for') . "/$upstream";
@@ -785,13 +818,15 @@ EOF
 
     my $remote = config('remote');
     cmd "git push $remote $refspec"
-        or die "push: Error pushing change.\n";
+        or error "push: Error pushing change.";
 
     unless ($Options{keep}) {
-        cmd("git checkout $upstream") and cmd("git branch -D $branch");
+        cmd "git checkout $upstream" and cmd "git branch -D $branch";
     }
 
     install_commit_msg_hook;
+
+    return;
 };
 
 $Commands{reviewer} = sub {
@@ -802,7 +837,7 @@ $Commands{reviewer} = sub {
     );
 
     my $id = shift @ARGV || current_change_id()
-        or pod2usage "reviewer: Missing CHANGE.\n";
+        or syntax_error "reviewer: Missing CHANGE.";
 
     # First try to make all deletions
     if (my $users = $Options{delete}) {
@@ -831,6 +866,8 @@ $Commands{reviewer} = sub {
         }
         print "\n";
     }
+
+    return;
 };
 
 $Commands{review} = sub {
@@ -850,12 +887,12 @@ $Commands{review} = sub {
         shift @ARGV;
         $review{labels}{$+{label} || 'Code-Review'} = $+{vote};
         $+{vote} =~ /^[+-]?\d$/
-            or pod2usage "review: Invalid vote ($+{vote}). It must be a single digit optionally prefixed by a [-+] sign.\n";
+            or syntax_error "review: Invalid vote ($+{vote}). It must be a single digit optionally prefixed by a [-+] sign.";
     }
 
-    die "review: Invalid vote $ARGV[0].\n" if @ARGV > 1;
+    error "review: Invalid vote $ARGV[0]." if @ARGV > 1;
 
-    die "review: You must specify a message or a vote to review.\n"
+    error "review: You must specify a message or a vote to review."
         unless keys %review;
 
     if (my $id = shift @ARGV) {
@@ -864,14 +901,16 @@ $Commands{review} = sub {
         my $branch = current_branch;
 
         my ($upstream, $id) = change_branch_info($branch)
-            or die "review: Missing CHANGE.\n";
+            or error "review: Missing CHANGE.";
 
         gerrit(POST => "/changes/$id/revisions/current/review", \%review);
 
         unless ($Options{keep}) {
-            cmd("git checkout $upstream") and cmd("git branch -D $branch");
+            cmd "git checkout $upstream" and cmd "git branch -D $branch";
         }
     }
+
+    return;
 };
 
 $Commands{abandon} = sub {
@@ -892,21 +931,23 @@ $Commands{abandon} = sub {
         my $branch = current_branch;
 
         my ($upstream, $id) = change_branch_info($branch)
-            or die "abandon: Missing CHANGE.\n";
+            or error "abandon: Missing CHANGE.";
 
         gerrit(POST => "/changes/$id/abandon", @args);
 
         unless ($Options{keep}) {
-            cmd("git checkout $upstream") and cmd("git branch -D $branch");
+            cmd "git checkout $upstream" and cmd "git branch -D $branch";
         }
     }
+
+    return;
 };
 
 $Commands{restore} = sub {
     get_options('message=s');
 
     my $id = shift @ARGV || current_change_id()
-        or pod2usage "restore: Missing CHANGE.\n";
+        or syntax_error "restore: Missing CHANGE.";
 
     my @args = ("/changes/$id/restore");
 
@@ -915,13 +956,15 @@ $Commands{restore} = sub {
     }
 
     gerrit(POST => @args);
+
+    return;
 };
 
 $Commands{revert} = sub {
     get_options('message=s');
 
     my $id = shift @ARGV || current_change_id()
-        or pod2usage "revert: Missing CHANGE.\n";
+        or syntax_error "revert: Missing CHANGE.";
 
     my @args = ("/changes/$id/revert");
 
@@ -930,6 +973,8 @@ $Commands{revert} = sub {
     }
 
     gerrit(POST => @args);
+
+    return;
 };
 
 $Commands{submit} = sub {
@@ -947,35 +992,37 @@ $Commands{submit} = sub {
         my $branch = current_branch;
 
         my ($upstream, $id) = change_branch_info($branch)
-            or die "submit: Missing CHANGE.\n";
+            or error "submit: Missing CHANGE.";
 
         gerrit(POST => "/changes/$id/submit", @args);
 
         unless ($Options{keep}) {
-            cmd("git checkout $upstream") and cmd("git branch -D $branch");
+            cmd "git checkout $upstream" and cmd "git branch -D $branch";
         }
     }
+
+    return;
 };
 
 $Commands{version} = sub {
     print "Perl version $^V\n";
     print "git-gerrit version $App::GitGerrit::VERSION\n";
     cmd "git version";
+    my $baseurl = config('baseurl'); # die unless configured
     my $version = eval { gerrit(GET => '/config/server/version') };
     $version //= "unknown (Certainly pre-2.7, since it doesn't support the 'Get Version' REST Endpoint.)";
     print "Gerrit version $version\n";
+    return;
 };
 
 # MAIN
 
 sub run {
     my $command = shift @ARGV
-        or die pod2usage "Missing command name.\n";
+        or syntax_error "Missing command name.";
 
     exists $Commands{$command}
-        or die pod2usage "Invalid command: $command.\n";
-
-    grok_config;
+        or syntax_error "Invalid command: $command.";
 
     $Commands{$command}->();
 
@@ -994,7 +1041,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.010
+version 0.011
 
 =head1 SYNOPSIS
 
