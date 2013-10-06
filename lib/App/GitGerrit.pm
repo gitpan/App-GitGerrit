@@ -21,7 +21,7 @@ use open ':std', $encoding;
 $App::GitGerrit::VERSION = 'unreleased';
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.011';
+  $App::GitGerrit::VERSION = '0.012';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -486,6 +486,68 @@ sub code_review {
     }
 }
 
+# This routine receives a branch name (normally the upstream of a
+# change-branch) and returns a list of users matching the
+# git-gerrit.reviewers specifications. The list returned is guaranteed
+# to have no duplicates.
+
+sub auto_reviewers {
+    my ($upstream) = @_;
+    my $paths;
+
+    my @reviewers;
+
+  REVIEWERS:
+    foreach my $spec (config('reviewers')) {
+        if (my ($users, @conditions) = split ' ', $spec) {
+            if (@conditions) {
+              CONDITION:
+                foreach my $condition (@conditions) {
+                    if (my ($what, $op, $match) = ($condition =~ /^(branch|path)([=~])(.+)$/i)) {
+                        if ($what eq 'branch') {
+                            if ($op eq '=') {
+                                next CONDITION if $upstream eq $match;
+                            } else {
+                                my $regex = eval { qr/$match/ };
+                                defined $regex
+                                    or info "Warning: skipping git-gerrit.reviewers spec with invalid REGEXP ($match)."
+                                        and next REVIEWERS;
+                                next CONDITION if $upstream =~ $match;
+                            }
+                        } else {
+                            unless ($paths) {
+                                $paths = [qx/git diff --name-only HEAD ^$upstream/];
+                                chomp @$paths;
+                            }
+                            if ($op eq '=') {
+                                foreach my $path (@$paths) {
+                                    next CONDITION if $path eq $match;
+                                }
+                            } else {
+                                my $regex = eval { qr/$match/ };
+                                defined $regex
+                                    or info "Warning: skipping git-gerrit.reviewers spec with invalid REGEXP ($match)."
+                                        and next REVIEWERS;
+                                foreach my $path (@$paths) {
+                                    next CONDITION if $path =~ $regex;
+                                }
+                            }
+                        }
+                    } else {
+                        info "Warning: skipping git-gerrit.reviewers spec with invalid condition ($condition).";
+                    }
+                    next REVIEWERS;
+                }
+            }
+            push @reviewers, split(/,/, $users);
+        }
+    }
+
+    # Use a hash to remove duplicates
+    my %reviewers = map {$_ => undef} @reviewers;
+    return keys %reviewers;
+}
+
 ############################################################
 # MAIN
 
@@ -764,6 +826,8 @@ $Commands{push} = sub {
         'rebase!',
         'draft',
         'topic=s',
+        'submit',
+        'base=s',
         'reviewer=s@',
         'cc=s@'
     );
@@ -805,11 +869,23 @@ EOF
     } elsif ($id =~ /\D/) {
         push @tags, "topic=$id";
     }
+
+    my @reviewers = auto_reviewers($upstream);
     if (my $reviewers = $Options{reviewer}) {
-        push @tags, map("r=$_", split(/,/, join(',', @$reviewers)));
+        push @reviewers, split(/,/, join(',', @$reviewers));
     }
+    if (@reviewers) {
+        push @tags, map("r=$_", @reviewers);
+    }
+
     if (my $ccs = $Options{cc}) {
         push @tags, map("cc=$_", split(/,/, join(',', @$ccs)));
+    }
+    if ($Options{submit}) {
+        push @tags, 'submit';
+    }
+    if (my $base = $Options{base}) {
+        push @tags, "base=$base";
     }
     if (@tags) {
         $refspec .= '%';
@@ -1041,7 +1117,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.011
+version 0.012
 
 =head1 SYNOPSIS
 

@@ -19,13 +19,14 @@ recommends:
   Net::Netrc: 0
   Term::Prompt: 0
   Text::Table: 0
+  Win32: 0.45
 requires:
   Data::Dumper: 0
   Exporter: 0
   File::Slurp: 0
   File::Spec: 0
   File::Temp: 0
-  Gerrit::REST: 0
+  Gerrit::REST: 0.005
   Getopt::Long: 0
   Pod::Usage: 0
   URI: 0
@@ -40,4 +41,4 @@ resources:
   bugtracker: https://github.com/gnustavo/git-gerrit/issues
   homepage: http://search.cpan.org/dist/App-GitGerrit/
   repository: git://github.com/gnustavo/git-gerrit.git
-version: 0.011
+version: 0.012

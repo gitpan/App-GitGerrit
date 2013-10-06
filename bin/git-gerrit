@@ -23,13 +23,13 @@ git-gerrit - Git extension to implement a Gerrit workflow
 
 =head1 VERSION
 
-version 0.011
+version 0.012
 
 =head1 SYNOPSIS
 
     git gerrit new         [--update] TOPIC [BRANCH]
-    git gerrit push        [--keep] [--force] [--[no]rebase] [--draft] \
-                           [--topic TOPIC] [--reviewer USER] [--cc USER]
+    git gerrit push        [--keep] [--force] [--[no]rebase] [--draft] [--submit] \
+                           [--base BASE] [--topic TOPIC] [--reviewer USER] [--cc USER]
 
     git gerrit query       [--limit LIMIT] [--verbose] [[NAME=]QUERY]*
     git gerrit my          [--limit LIMIT] [--verbose] [changes|drafts|watched|starred]
@@ -176,6 +176,57 @@ The project name associated with your repository.
 
 The Git remote name you use to push commits to and fetch commits from
 your Gerrit server.
+
+=back
+
+The following configuration variables may be used to change
+git-gerrit's default operation.
+
+=over
+
+=item * B<git-gerrit.reviewers USERS [CONDITION]*>
+
+This variable specifies a list of Gerrit users to be automatically
+invited as reviewers in a B<git gerrit push> command.
+
+USERS is a colon-separated list of usernames.
+
+CONDITIONs are space-separated boolean expressions. All CONDITIONs, if
+any, must be true for USERS to be invited. If no CONDITIONS are
+specified, USERS are invited.
+
+A CONDITION may check either the name of the branch to which the
+change is being pushed or the names of the files affected by the
+change itself. The matching may be either exact or by L<regular
+expressions|perlre>, as follows.
+
+=over
+
+=item * branch=REFNAME
+
+Checks if REFNAME is exactly equal to the change's upstream name
+(without the C<refs/heads> prefix).
+
+=item * branch~REGEXP
+
+Checks if the upstream name matches REGEXP.
+
+=item * path=PATH
+
+Checks if the path of any file affected by the commit being pushed, as
+shown by C<git diff --name-only upstream..HEAD> is exactly equal to
+the complete path of one of those files.
+
+=item * path~REGEXP
+
+Checks if the path of any affected file matches REGEXP.
+
+=back
+
+You may specify the C<git-gerrit.reviewers> variable multiple
+times. All users mentioned in all specifications that match their
+CONDITIONs are invited as reviewers to the current change being
+pushed.
 
 =back
 
@@ -362,7 +413,7 @@ the newest state of your project, which is usually the right thing to do.
 You will be warned if your working area is dirty, as this is sometimes
 a mistake.
 
-=head2 git gerrit push [--keep] [--force] [--[no]rebase] [--draft] [--topic=TOPIC] [--reviewer USERS] [--cc USERS]
+=head2 git gerrit push [--keep] [--force] [--[no]rebase] [--draft] [--submit] [--base BASE] [--topic=TOPIC] [--reviewer USERS] [--cc USERS]
 
 The C<push> sub-command should be invoked to push a change-branch to
 Gerrit's C<refs/for/> branch associated with its upstream branch. It
@@ -417,6 +468,18 @@ C<--rebase> option.
 This option makes git-gerrit push the change-branch to
 C<refs/drafts/UPSTREAM> instead of to C<refs/for/UPSTREAM>, creating a
 draft change in Gerrit.
+
+=item B<--submit>
+
+This option tells Gerrit to L<auto-merge the change during
+push|http://gerrit-documentation.googlecode.com/svn/Documentation/2.7/user-upload.html#auto_merge>,
+which is a feature implemented in Gerrit 2.7.
+
+=item B<--base BASE>
+
+This option L<selects a new merge
+base|http://gerrit-documentation.googlecode.com/svn/Documentation/2.7/user-upload.html#base>
+for Gerrit, which is a feature implemented in Gerrit 2.7.
 
 =item B<--topic TOPIC>
 
@@ -507,15 +570,15 @@ example:
           Owner: Gustavo Chaves
         Project: helloworld
          Branch: master
-        Created: 2013-09-18 16:22:21.000000000
-        Updated: 2013-09-18 19:45:56.000000000
+        Created: 2013-09-18 16:22:21
+        Updated: 2013-09-18 19:45:56
          Status: MERGED
 
 If a CHANGE is not passed the branch associated with the current
 change-branch is described. If you're not in a change-branch, you'll
 get an error.
 
-=head2 git gerrit checkout|co [CHANGE]
+=head2 git gerrit checkout [CHANGE]
 
 The B<checkout> sub-command fetches a CHANGE from Gerrit, creates a
 change-branch pointing to it and checks it out, leaving your working
@@ -530,7 +593,7 @@ be updated with its current patch-set.
 
 The shorter name C<co> can also be used instead of C<checkout>.
 
-=head2 git gerrit upstream|up [--keep] [--delete]
+=head2 git gerrit upstream [--keep] [--delete]
 
 The B<upstream> sub-command should be invoked when you're in a
 change-branch. It checks out the upstream branch and deletes the
