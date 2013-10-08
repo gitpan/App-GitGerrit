@@ -30,6 +30,7 @@ my %WriteMakefileArgs = (
     "Gerrit::REST" => "0.005",
     "Getopt::Long" => 0,
     "Pod::Usage" => 0,
+    "Text::Table" => 0,
     "URI" => 0,
     "URI::Escape" => 0,
     "locale" => 0,
@@ -42,7 +43,7 @@ my %WriteMakefileArgs = (
     "Test::More" => 0,
     "lib" => 0
   },
-  "VERSION" => "0.012",
+  "VERSION" => "0.013",
   "test" => {
     "TESTS" => "t/*.t"
   }

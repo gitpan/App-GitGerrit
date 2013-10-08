@@ -21,7 +21,7 @@ use open ':std', $encoding;
 $App::GitGerrit::VERSION = 'unreleased';
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.012';
+  $App::GitGerrit::VERSION = '0.013';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -96,12 +96,6 @@ sub grok_config {
         }
     }
 
-    # Override option defaults
-    for my $opt (qw/verbose/) {
-        $Options{$opt} = $config{"default-$opt"}[-1]
-            if exists $config{"default-$opt"};
-    }
-
     unless ($config{baseurl} && $config{project} && $config{remote}) {
         info "Missing required configuration:";
 
@@ -133,9 +127,6 @@ EOF
     $config{baseurl}[-1] =~ s:/+$::; # trim trailing slashes from the baseurl
     $config{baseurl}[-1] = URI->new($config{baseurl}[-1]);
 
-    chomp(my $gitdir = qx/git rev-parse --git-dir/);
-    push @{$config{gitdir}}, $gitdir;
-
     return \%config;
 }
 
@@ -165,12 +156,14 @@ sub config {
 sub install_commit_msg_hook {
     require File::Spec;
 
+    chomp(my $git_dir = qx/git rev-parse --git-dir/);
+
     # Do nothing if it already exists
-    my $commit_msg = File::Spec->catfile(scalar(config('gitdir')), 'hooks', 'commit-msg');
+    my $commit_msg = File::Spec->catfile($git_dir, 'hooks', 'commit-msg');
     return if -e $commit_msg;
 
     # Otherwise, check if we need to mkdir the hooks directory
-    my $hooks_dir = File::Spec->catdir(scalar(config('gitdir')), 'hooks');
+    my $hooks_dir = File::Spec->catdir($git_dir, 'hooks');
     mkdir $hooks_dir unless -e $hooks_dir;
 
     # Try to download and install the hook.
@@ -359,6 +352,14 @@ sub gerrit {
     }
 
     return $gerrit->$method(@_);
+}
+
+# The normalize_date routine removes the trailing zeroes from a $date.
+
+sub normalize_date {
+    my ($date) = @_;
+    $date =~ s/\.0+$//;
+    return $date;
 }
 
 # The query_changes routine receives a list of strings to query the
@@ -610,41 +611,32 @@ $Commands{query} = sub {
 
     my $changes = query_changes(@queries);
 
-    my $table = eval {require Text::Table}
-        ? Text::Table->new(qw/ID STATUS CR UPDATED PROJECT BRANCH OWNER SUBJECT/)
-        : undef;
-    state $format = "%-5s %-9s %2s %-19s %-20s %-12s %-24s %s\n";
-
     for (my $i=0; $i < @$changes; ++$i) {
-        print "\n[$names[$i]=$queries[$i]]\n";
+        print "[$names[$i]=$queries[$i]]\n";
         next unless @{$changes->[$i]};
-        printf $format, qw/ID STATUS CR UPDATED PROJECT BRANCH OWNER SUBJECT/
-            unless $table;
+
+        require Text::Table;
+        my $table = Text::Table->new("ID\n&num", qw/STATUS CR UPDATED PROJECT BRANCH OWNER SUBJECT/);
+
         foreach my $change (sort {$b->{updated} cmp $a->{updated}} @{$changes->[$i]}) {
             if ($Options{verbose}) {
                 if (my $topic = gerrit(GET => "/changes/$change->{id}/topic")) {
                     $change->{branch} .= " ($topic)";
                 }
             }
-            my @values = (
+            $table->add(
                 $change->{_number},
                 $change->{status},
                 code_review($change->{labels}{'Code-Review'}),
-                substr($change->{updated}, 0, 19),
+                normalize_date($change->{updated}),
                 $change->{project},
                 $change->{branch},
-                substr($change->{owner}{name}, 0, 24),
+                $change->{owner}{name},
                 $change->{subject},
             );
-            if ($table) {
-                $table->add(@values);
-            } else {
-                printf $format, @values;
-            }
         }
-        print $table->table() if $table;
+        print $table->table(), "\n";
     }
-    print "\n";
 
     return;
 };
@@ -694,12 +686,12 @@ $Commands{show} = sub {
       Owner: $change->{owner}{name}
 EOF
 
-    for my $date (qw/created updated/) {
-        # Remove trailing zeroes from the dates
-        $change->{$date} =~ s/\.0+$// if exists $change->{$date};
+    foreach my $date (qw/created updated/) {
+        $change->{$date} = normalize_date($change->{$date})
+            if exists $change->{$date};
     }
 
-    for my $key (qw/project branch topic created updated status reviewed mergeable/) {
+    foreach my $key (qw/project branch topic created updated status reviewed mergeable/) {
         printf "%12s %s\n", "\u$key:", $change->{$key}
             if exists $change->{$key};
     }
@@ -718,22 +710,14 @@ EOF
     }
 
     # And now we can output the vote table
-    my $table = eval {require Text::Table}
-        ? Text::Table->new('REVIEWER', map {"$_\n&num"} @labels)
-        : undef;
-
-    printf "%-32s %-s\n", 'REVIEWER', join("\t", @labels)
-        unless $table;
+    require Text::Table;
+    my $table = Text::Table->new('REVIEWER', map {"$_\n&num"} @labels);
 
     foreach my $name (sort keys %reviewers) {
         my @votes = map {$_ > 0 ? "+$_" : $_} map {defined $_ ? $_ : '0'} @{$reviewers{$name}}{@labels};
-        if ($table) {
-            $table->add($name, @votes);
-        } else {
-            printf "%-32s %-s\n", substr($name, 0, 32), join("\t", @votes);
-        }
+        $table->add($name, @votes);
     }
-    print $table->table() if $table;
+    print $table->table(), "\n";
 
     return;
 };
@@ -931,17 +915,15 @@ $Commands{reviewer} = sub {
     }
 
     # Finally, list current reviewers
-    my @reviewers = gerrit(GET => "/changes/$id/reviewers");
-    print "There are ", scalar(@reviewers), " reviewers currently:\n";
-    foreach my $reviewer (@reviewers) {
-        print "$reviewer->{name}\t$reviewer->{email}\t";
-        foreach my $approval (sort keys %{$reviewer->{approvals}}) {
-            print "$approval:$reviewer->{approvals}{$approval}";
-        } continue {
-            print ", ";
-        }
-        print "\n";
-    }
+    my $reviewers = gerrit(GET => "/changes/$id/reviewers");
+
+    require Text::Table;
+    my %labels = map {$_ => undef} map {keys %{$_->{approvals}}} @$reviewers;
+    my @labels = sort keys %labels;
+    my $table = Text::Table->new('REVIEWER', map {"$_\n&num"} @labels);
+    $table->add($_->{name}, @{$_->{approvals}}{@labels})
+        foreach sort {$a->{name} cmp $b->{name}} @$reviewers;
+    print $table->table(), "\n";
 
     return;
 };
@@ -1086,7 +1068,7 @@ $Commands{version} = sub {
     cmd "git version";
     my $baseurl = config('baseurl'); # die unless configured
     my $version = eval { gerrit(GET => '/config/server/version') };
-    $version //= "unknown (Certainly pre-2.7, since it doesn't support the 'Get Version' REST Endpoint.)";
+    $version //= "pre-2.7 (Because it doesn't support the 'Get Version' REST Endpoint.)";
     print "Gerrit version $version\n";
     return;
 };
@@ -1117,7 +1099,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.012
+version 0.013
 
 =head1 SYNOPSIS
 
