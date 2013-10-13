@@ -27,7 +27,7 @@ my %WriteMakefileArgs = (
     "File::Slurp" => 0,
     "File::Spec" => 0,
     "File::Temp" => 0,
-    "Gerrit::REST" => "0.005",
+    "Gerrit::REST" => "0.008",
     "Getopt::Long" => 0,
     "Pod::Usage" => 0,
     "Text::Table" => 0,
@@ -43,7 +43,7 @@ my %WriteMakefileArgs = (
     "Test::More" => 0,
     "lib" => 0
   },
-  "VERSION" => "0.013",
+  "VERSION" => "0.014",
   "test" => {
     "TESTS" => "t/*.t"
   }

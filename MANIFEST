@@ -10,3 +10,4 @@ lib/App/GitGerrit.pm
 t/00-load.t
 t/author-critic.t
 t/release-pod-syntax.t
+tidyall.ini
