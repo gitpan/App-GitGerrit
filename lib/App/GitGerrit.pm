@@ -21,7 +21,7 @@ use open ':std', $encoding;
 $App::GitGerrit::VERSION = 'unreleased';
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.014';
+  $App::GitGerrit::VERSION = '0.015';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -34,6 +34,11 @@ use URI::Escape;
 # http://elliotlovesperl.com/2009/11/23/how-to-structure-perl-programs/
 use Exporter 'import';
 our @EXPORT_OK = qw/run/;
+
+# The $Command variable holds the name of the git-gerrit sub-command
+# that's been invoked. It's defined in the 'run' routine below.
+
+my $Command;
 
 # The %Options hash is used to hold the command line options passed to
 # all git-gerrit subcommands. The --debug option is common to all of
@@ -64,6 +69,15 @@ sub syntax_error {
 
 sub get_options {
     my (@opt_specs) = @_;
+
+    # Get defaults from configuration
+    foreach my $cmd ($Command, 'all') {
+        if (my $options = config("options.$cmd")) {
+            debug "$cmd: unshift default options: $options";
+            unshift @ARGV, split(' ', $options);
+        }
+    }
+
     GetOptions(\%Options, 'debug', 'help', @opt_specs) or pod2usage(2);
     pod2usage({-exitval => 1, -verbose => 2}) if $Options{help};
 }
@@ -317,21 +331,31 @@ sub get_message {
 
     require File::Temp;
     my $tmp = File::Temp->new();
+    my $filename = $tmp->filename;
 
-    require File::Slurp;
-    File::Slurp::write_file($tmp->filename, <<'EOF');
+    {
+        open my $fh, '>', $filename
+            or error "Can't open file for writing ($filename): $!\n";
+        print $fh <<'EOF';
 
 # Please enter the review message for this change. Lines starting
 # with '#' will be ignored, and an empty message aborts the review.
 EOF
+        close $fh;
+    }
 
-    cmd "$editor $tmp"
-        or error "Aborting because I couldn't invoke '$editor $tmp'.";
+    cmd "$editor $filename"
+        or error "Aborting because I couldn't invoke '$editor $filename'.";
 
-    my $message = File::Slurp::read_file($tmp->filename);
-
+    my $message;
+    {
+        open my $fh, '<', $filename
+            or error "Can't open file for reading ($filename): $!\n";
+        local $/ = undef;       # slurp mode
+        $message = <$fh>;
+        close $fh;
+    }
     $message =~ s/(?<=\n)#.*?\n//gs; # remove all lines starting with '#'
-
     return $message;
 }
 
@@ -591,18 +615,18 @@ $Commands{new} = sub {
     get_options('update');
 
     my $topic = shift @ARGV
-        or syntax_error "new: Missing TOPIC.";
+        or syntax_error "$Command: Missing TOPIC.";
 
     $topic !~ m:/:
-        or error "new: the topic name ($topic) should not contain slashes.";
+        or error "$Command: the topic name ($topic) should not contain slashes.";
 
     $topic =~ m:\D:
-        or error "new: the topic name ($topic) should contain at least one non-digit character.";
+        or error "$Command: the topic name ($topic) should contain at least one non-digit character.";
 
     my $branch = shift @ARGV || current_branch;
 
     if (my ($upstream, $id) = change_branch_info($branch)) {
-        error "new: You can't base a new change on a change branch ($branch).";
+        error "$Command: You can't base a new change on a change branch ($branch).";
     }
 
     my $status = qx/git status --porcelain --untracked-files=no/;
@@ -612,7 +636,7 @@ $Commands{new} = sub {
 
     if ($Options{update}) {
         update_branch($branch)
-            or error "new: Non-fast-forward pull. Please, merge or rebase your branch first.";
+            or error "$Command: Non-fast-forward pull. Please, merge or rebase your branch first.";
     }
 
     cmd "git checkout -b change/$branch/$topic $branch";
@@ -689,7 +713,7 @@ $Commands{my} = sub {
             # By default we show 'My Changes'
             push @ARGV, @{$StandardQueries{changes}};
         } else {
-            syntax_error "my: Invalid change specification: '$ARGV[-1]'";
+            syntax_error "$Command: Invalid change specification: '$ARGV[-1]'";
         }
     } else {
         # By default we show 'My Changes'
@@ -705,7 +729,7 @@ $Commands{show} = sub {
     get_options();
 
     my $id = shift @ARGV || current_change_id()
-        or syntax_error "show: Missing CHANGE.";
+        or syntax_error "$Command: Missing CHANGE.";
 
     my $change = gerrit_or_die(GET => "/changes/$id/detail");
 
@@ -772,7 +796,7 @@ $Commands{checkout} = $Commands{co} = sub {
     get_options();
 
     my $id = shift @ARGV || current_change_id()
-        or syntax_error "checkout: Missing CHANGE.";
+        or syntax_error "$Command: Missing CHANGE.";
 
     my $change = get_change($id);
 
@@ -807,7 +831,7 @@ $Commands{upstream} = $Commands{up} = sub {
             }
         }
     } else {
-        error "upstream: You aren't in a change branch. There is no upstream to go to.";
+        error "$Command: You aren't in a change branch. There is no upstream to go to.";
     }
 
     return;
@@ -822,11 +846,11 @@ $Commands{'cherry-pick'} = $Commands{cp} = sub {
     # Since we're passing through options, they're left at the start
     # of @ARGV. So, we pop the change-id instead of shifting it.
     my $id = pop @ARGV
-        or syntax_error "cherry-pick: Missing CHANGE.";
+        or syntax_error "$Command: Missing CHANGE.";
 
     # Make sure we haven't popped out an option.
     $id !~ /^-/
-        or syntax_error "cherry-pick: Missing CHANGE.";
+        or syntax_error "$Command: Missing CHANGE.";
 
     my $change = get_change($id);
 
@@ -835,7 +859,7 @@ $Commands{'cherry-pick'} = $Commands{cp} = sub {
     my ($url, $ref) = @{$revision->{fetch}{http}}{qw/url ref/};
 
     cmd "git fetch $url $ref"
-        or error "cherry-pick: can't git fetch $url $ref";
+        or error "$Command: can't git fetch $url $ref";
 
     cmd join(' ', 'git cherry-pick', @ARGV, 'FETCH_HEAD');
 
@@ -859,7 +883,7 @@ $Commands{push} = sub {
     my $branch = current_branch;
 
     my ($upstream, $id) = change_branch_info($branch)
-        or error "push: You aren't in a change branch. I cannot push it.";
+        or error "$Command: You aren't in a change branch. I cannot push it.";
 
     qx/git status --porcelain --untracked-files=no/ eq ''
         or $Options{force}--
@@ -870,7 +894,7 @@ EOF
 
     my @commits = qx/git log --decorate=no --oneline HEAD ^$upstream/;
     if (@commits == 0) {
-        error "push: no changes between $upstream and $branch. Pushing would be pointless.";
+        error "$Command: no changes between $upstream and $branch. Pushing would be pointless.";
     } elsif (@commits > 1) {
         error <<EOF unless $Options{force}--;
 push: you have more than one commit that you are about to push.
@@ -884,9 +908,9 @@ EOF
     # A --noverbose option sets $Options{rebase} to '0'.
     if ($Options{rebase} || $Options{rebase} eq '' && $id =~ /\D/) {
         update_branch($upstream)
-            or error "push: Non-fast-forward pull. Please, merge or rebase your branch first.";
+            or error "$Command: Non-fast-forward pull. Please, merge or rebase your branch first.";
         cmd "git rebase $upstream"
-            or error "push: please resolve this 'git rebase $upstream' and try again.";
+            or error "$Command: please resolve this 'git rebase $upstream' and try again.";
     }
 
     my $refspec = 'HEAD:refs/' . ($Options{draft} ? 'draft' : 'for') . "/$upstream";
@@ -922,7 +946,7 @@ EOF
 
     my $remote = config('remote');
     cmd "git push $remote $refspec"
-        or error "push: Error pushing change.";
+        or error "$Command: Error pushing change.";
 
     unless ($Options{keep}) {
         cmd "git checkout $upstream" and cmd "git branch -D $branch";
@@ -941,7 +965,7 @@ $Commands{reviewer} = sub {
     );
 
     my $id = shift @ARGV || current_change_id()
-        or syntax_error "reviewer: Missing CHANGE.";
+        or syntax_error "$Command: Missing CHANGE.";
 
     # First try to make all deletions
     if (my $users = $Options{delete}) {
@@ -990,12 +1014,12 @@ $Commands{review} = sub {
         shift @ARGV;
         $review{labels}{$+{label} || 'Code-Review'} = $+{vote};
         $+{vote} =~ /^[+-]?\d$/
-            or syntax_error "review: Invalid vote ($+{vote}). It must be a single digit optionally prefixed by a [-+] sign.";
+            or syntax_error "$Command: Invalid vote ($+{vote}). It must be a single digit optionally prefixed by a [-+] sign.";
     }
 
-    error "review: Invalid vote $ARGV[0]." if @ARGV > 1;
+    error "$Command: Invalid vote $ARGV[0]." if @ARGV > 1;
 
-    error "review: You must specify a message or a vote to review."
+    error "$Command: You must specify a message or a vote to review."
         unless keys %review;
 
     if (my $id = shift @ARGV) {
@@ -1004,7 +1028,7 @@ $Commands{review} = sub {
         my $branch = current_branch;
 
         my ($upstream, $id) = change_branch_info($branch)
-            or error "review: Missing CHANGE.";
+            or error "$Command: Missing CHANGE.";
 
         gerrit_or_die(POST => "/changes/$id/revisions/current/review", \%review);
 
@@ -1034,7 +1058,7 @@ $Commands{abandon} = sub {
         my $branch = current_branch;
 
         my ($upstream, $id) = change_branch_info($branch)
-            or error "abandon: Missing CHANGE.";
+            or error "$Command: Missing CHANGE.";
 
         gerrit_or_die(POST => "/changes/$id/abandon", @args);
 
@@ -1050,7 +1074,7 @@ $Commands{restore} = sub {
     get_options('message=s');
 
     my $id = shift @ARGV || current_change_id()
-        or syntax_error "restore: Missing CHANGE.";
+        or syntax_error "$Command: Missing CHANGE.";
 
     my @args = ("/changes/$id/restore");
 
@@ -1067,7 +1091,7 @@ $Commands{revert} = sub {
     get_options('message=s');
 
     my $id = shift @ARGV || current_change_id()
-        or syntax_error "revert: Missing CHANGE.";
+        or syntax_error "$Command: Missing CHANGE.";
 
     my @args = ("/changes/$id/revert");
 
@@ -1095,7 +1119,7 @@ $Commands{submit} = sub {
         my $branch = current_branch;
 
         my ($upstream, $id) = change_branch_info($branch)
-            or error "submit: Missing CHANGE.";
+            or error "$Command: Missing CHANGE.";
 
         gerrit_or_die(POST => "/changes/$id/submit", @args);
 
@@ -1121,13 +1145,13 @@ $Commands{version} = sub {
 # MAIN
 
 sub run {
-    my $command = shift @ARGV
+    $Command = shift @ARGV
         or syntax_error "Missing command name.";
 
-    exists $Commands{$command}
-        or syntax_error "Invalid command: $command.";
+    exists $Commands{$Command}
+        or syntax_error "Invalid command: $Command.";
 
-    $Commands{$command}->();
+    $Commands{$Command}->();
 
     return 0;
 }
@@ -1144,7 +1168,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.014
+version 0.015
 
 =head1 SYNOPSIS
 

@@ -22,7 +22,6 @@ recommends:
 requires:
   Data::Dumper: 0
   Exporter: 0
-  File::Slurp: 0
   File::Spec: 0
   File::Temp: 0
   Gerrit::REST: 0.008
@@ -41,4 +40,4 @@ resources:
   bugtracker: https://github.com/gnustavo/git-gerrit/issues
   homepage: http://search.cpan.org/dist/App-GitGerrit/
   repository: git://github.com/gnustavo/git-gerrit.git
-version: 0.014
+version: 0.015

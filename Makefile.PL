@@ -24,7 +24,6 @@ my %WriteMakefileArgs = (
   "PREREQ_PM" => {
     "Data::Dumper" => 0,
     "Exporter" => 0,
-    "File::Slurp" => 0,
     "File::Spec" => 0,
     "File::Temp" => 0,
     "Gerrit::REST" => "0.008",
@@ -43,7 +42,7 @@ my %WriteMakefileArgs = (
     "Test::More" => 0,
     "lib" => 0
   },
-  "VERSION" => "0.014",
+  "VERSION" => "0.015",
   "test" => {
     "TESTS" => "t/*.t"
   }
