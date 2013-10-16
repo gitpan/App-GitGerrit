@@ -21,7 +21,7 @@ use open ':std', $encoding;
 $App::GitGerrit::VERSION = 'unreleased';
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.015';
+  $App::GitGerrit::VERSION = '0.016';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -372,14 +372,8 @@ sub gerrit {
         $gerrit = Gerrit::REST->new(config('baseurl'), $username, $password);
         eval { $gerrit->GET("/projects/" . uri_escape_utf8(config('project'))) };
         if (my $error = $@) {
-            if ($error->{code} == 401) {
-                error "Gerrit rejected the authentication credentials";
-            } elsif ($error->{code} == 403) {
-                error "Cannot connect to Gerrit at " . config('baseurl');
-            } else {
-                error "Error connecting to Gerrit:\n" . $error->as_text;
-            }
-            set_credentials($username, $password, 'reject');
+            set_credentials($username, $password, 'reject') if $error->{code} == 401;
+            die $error;
         } else {
             set_credentials($username, $password, 'approve');
         }
@@ -1168,7 +1162,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.015
+version 0.016
 
 =head1 SYNOPSIS
 

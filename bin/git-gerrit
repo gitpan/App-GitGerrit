@@ -23,7 +23,7 @@ git-gerrit - Git extension to implement a Gerrit workflow
 
 =head1 VERSION
 
-version 0.015
+version 0.016
 
 =head1 SYNOPSIS
 

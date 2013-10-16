@@ -24,7 +24,7 @@ requires:
   Exporter: 0
   File::Spec: 0
   File::Temp: 0
-  Gerrit::REST: 0.008
+  Gerrit::REST: 0.009
   Getopt::Long: 0
   Pod::Usage: 0
   Text::Table: 0
@@ -40,4 +40,4 @@ resources:
   bugtracker: https://github.com/gnustavo/git-gerrit/issues
   homepage: http://search.cpan.org/dist/App-GitGerrit/
   repository: git://github.com/gnustavo/git-gerrit.git
-version: 0.015
+version: 0.016
