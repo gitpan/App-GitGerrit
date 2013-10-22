@@ -21,7 +21,7 @@ use open ':std', $encoding;
 $App::GitGerrit::VERSION = 'unreleased';
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.016';
+  $App::GitGerrit::VERSION = '0.017';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -597,6 +597,20 @@ sub auto_reviewers {
     return keys %reviewers;
 }
 
+# This routine is used by all sub-commands that accept zero or more
+# change ids. If @ARGV is empty it pushes into it the id of the change
+# associated with the current change-branch, if any.
+
+sub grok_unspecified_change {
+    unless (@ARGV) {
+        my $id = current_change_id()
+            or syntax_error "$Command: You have to be in a change-branch or specify at least one CHANGE.";
+        $id =~ /^\d+$/
+            or error "$Command: The change-branch you're in haven't been pushed yet.";
+        @ARGV = ($id);
+    }
+}
+
 ############################################################
 # MAIN
 
@@ -620,7 +634,8 @@ $Commands{new} = sub {
     my $branch = shift @ARGV || current_branch;
 
     if (my ($upstream, $id) = change_branch_info($branch)) {
-        error "$Command: You can't base a new change on a change branch ($branch).";
+        # If we're on a change-branch the new change-branch is based on the same upstream
+        $branch = $upstream;
     }
 
     my $status = qx/git status --porcelain --untracked-files=no/;
@@ -722,50 +737,51 @@ $Commands{my} = sub {
 $Commands{show} = sub {
     get_options();
 
-    my $id = shift @ARGV || current_change_id()
-        or syntax_error "$Command: Missing CHANGE.";
+    grok_unspecified_change();
 
-    my $change = gerrit_or_die(GET => "/changes/$id/detail");
+    foreach my $id (@ARGV) {
+        my $change = gerrit_or_die(GET => "/changes/$id/detail");
 
-    print <<EOF;
+        print <<EOF;
  Change-Num: $change->{_number}
   Change-Id: $change->{change_id}
     Subject: $change->{subject}
       Owner: $change->{owner}{name}
 EOF
 
-    foreach my $date (qw/created updated/) {
-        $change->{$date} = normalize_date($change->{$date})
-            if exists $change->{$date};
-    }
-
-    foreach my $key (qw/project branch topic created updated status reviewed mergeable/) {
-        printf "%12s %s\n", "\u$key:", $change->{$key}
-            if exists $change->{$key};
-    }
-
-    print "\n";
-    # We want to produce a table in which the first column lists the
-    # reviewer names and the other columns have their votes for each
-    # label. However, the change object has this information
-    # inverted. So, we have to first collect all votes.
-    my @labels = sort keys %{$change->{labels}};
-    my %reviewers;
-    while (my ($label, $info) = each %{$change->{labels}}) {
-        foreach my $vote (@{$info->{all}}) {
-            $reviewers{$vote->{name}}{$label} = $vote->{value};
+        foreach my $date (qw/created updated/) {
+            $change->{$date} = normalize_date($change->{$date})
+                if exists $change->{$date};
         }
-    }
 
-    # And now we can output the vote table
-    require Text::Table;
-    my $table = Text::Table->new('REVIEWER', map {"$_\n&num"} @labels);
+        foreach my $key (qw/project branch topic created updated status reviewed mergeable/) {
+            printf "%12s %s\n", "\u$key:", $change->{$key}
+                if exists $change->{$key};
+        }
 
-    foreach my $name (sort keys %reviewers) {
-        my @votes = map {$_ > 0 ? "+$_" : $_} map {defined $_ ? $_ : '0'} @{$reviewers{$name}}{@labels};
-        $table->add($name, @votes);
+        print "\n";
+        # We want to produce a table in which the first column lists the
+        # reviewer names and the other columns have their votes for each
+        # label. However, the change object has this information
+        # inverted. So, we have to first collect all votes.
+        my @labels = sort keys %{$change->{labels}};
+        my %reviewers;
+        while (my ($label, $info) = each %{$change->{labels}}) {
+            foreach my $vote (@{$info->{all}}) {
+                $reviewers{$vote->{name}}{$label} = $vote->{value};
+            }
+        }
+
+        # And now we can output the vote table
+        require Text::Table;
+        my $table = Text::Table->new('REVIEWER', map {"$_\n&num"} @labels);
+
+        foreach my $name (sort keys %reviewers) {
+            my @votes = map {$_ > 0 ? "+$_" : $_} map {defined $_ ? $_ : '0'} @{$reviewers{$name}}{@labels};
+            $table->add($name, @votes);
+        }
+        print $table->table(), '-' x 60, "\n";
     }
-    print $table->table(), "\n";
 
     return;
 };
@@ -789,20 +805,25 @@ $Commands{config} = sub {
 $Commands{checkout} = $Commands{co} = sub {
     get_options();
 
-    my $id = shift @ARGV || current_change_id()
-        or syntax_error "$Command: Missing CHANGE.";
+    grok_unspecified_change();
 
-    my $change = get_change($id);
+    my $branch;
+    my $project = config('project');
+    foreach my $id (@ARGV) {
+        my $change = get_change($id);
 
-    my ($revision) = values %{$change->{revisions}};
+        $change->{project} eq $project
+            or error "$Command: Change $id belongs to a different project ($change->{project}), not $project";
 
-    my ($url, $ref) = @{$revision->{fetch}{http}}{qw/url ref/};
+        my ($revision) = values %{$change->{revisions}};
 
-    my $branch = "change/$change->{branch}/$change->{_number}";
+        my ($url, $ref) = @{$revision->{fetch}{http}}{qw/url ref/};
 
-    cmd "git fetch $url $ref:$branch"
-        or error "Can't fetch $url";
+        $branch = "change/$change->{branch}/$change->{_number}";
 
+        cmd "git fetch $url $ref:$branch"
+            or error "$Command: Can't fetch $url";
+    }
     cmd "git checkout $branch";
 
     return;
@@ -832,7 +853,7 @@ $Commands{upstream} = $Commands{up} = sub {
 };
 
 $Commands{'cherry-pick'} = $Commands{cp} = sub {
-    # The 'gerrit cherry-pick' sub-commands passes all of its options,
+    # The 'gerrit cherry-pick' sub-command passes all of its options,
     # but --debug, to 'git cherry-pick'.
     Getopt::Long::Configure('pass_through');
     get_options();
@@ -847,6 +868,10 @@ $Commands{'cherry-pick'} = $Commands{cp} = sub {
         or syntax_error "$Command: Missing CHANGE.";
 
     my $change = get_change($id);
+
+    my $project = config('project');
+    $change->{project} eq $project
+        or error "$Command: Change $id belongs to a different project ($change->{project}), not $project";
 
     my ($revision) = values %{$change->{revisions}};
 
@@ -879,8 +904,9 @@ $Commands{push} = sub {
     my ($upstream, $id) = change_branch_info($branch)
         or error "$Command: You aren't in a change branch. I cannot push it.";
 
-    qx/git status --porcelain --untracked-files=no/ eq ''
-        or $Options{force}--
+    my $is_clean = qx/git status --porcelain --untracked-files=no/ eq '';
+
+    $is_clean or $Options{force}--
             or error <<EOF;
 push: Can't push change because git-status is dirty.
       If this is really what you want to do, please try again with --force.
@@ -900,7 +926,7 @@ EOF
     }
 
     # A --noverbose option sets $Options{rebase} to '0'.
-    if ($Options{rebase} || $Options{rebase} eq '' && $id =~ /\D/) {
+    if ($is_clean && ($Options{rebase} || $Options{rebase} eq '' && $id =~ /\D/)) {
         update_branch($upstream)
             or error "$Command: Non-fast-forward pull. Please, merge or rebase your branch first.";
         cmd "git rebase $upstream"
@@ -942,7 +968,7 @@ EOF
     cmd "git push $remote $refspec"
         or error "$Command: Error pushing change.";
 
-    unless ($Options{keep}) {
+    if ($is_clean && ! $Options{keep}) {
         cmd "git checkout $upstream" and cmd "git branch -D $branch";
     }
 
@@ -1125,6 +1151,39 @@ $Commands{submit} = sub {
     return;
 };
 
+$Commands{web} = sub {
+    # The 'gerrit web' sub-command passes all of its options,
+    # but --debug, to 'git web--browse'.
+    Getopt::Long::Configure('pass_through');
+    get_options();
+
+    # If the user is passing any option we require that it mark where
+    # they end with a '--' so that we know where the CHANGEs arguments
+    # start.
+    my @options;
+    for (my $i = 0; $i < @ARGV; ++$i) {
+        if ($ARGV[$i] eq '--') {
+            # We found a mark. Let's move all the options from @ARGV
+            # to @options and get rid of the mark.
+            @options = splice @ARGV, 0, $i;
+            shift @ARGV;
+            last;
+        }
+    }
+
+    grok_unspecified_change();
+
+    # Grok the URLs of each change
+    my @urls;
+    my $baseurl = config('baseurl');
+    foreach my $id (@ARGV) {
+        my $change = get_change($id);
+        push @urls, "$baseurl/#/c/$change->{_number}";
+    }
+
+    cmd join(' ', qw/git web--browse/, @options, @urls);
+};
+
 $Commands{version} = sub {
     print "Perl version $^V\n";
     print "git-gerrit version $App::GitGerrit::VERSION\n";
@@ -1162,7 +1221,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.016
+version 0.017
 
 =head1 SYNOPSIS
 
