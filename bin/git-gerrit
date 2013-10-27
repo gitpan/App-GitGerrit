@@ -23,7 +23,7 @@ git-gerrit - Git extension to implement a Gerrit workflow
 
 =head1 VERSION
 
-version 0.017
+version 0.020
 
 =head1 SYNOPSIS
 
@@ -295,7 +295,7 @@ the newest state of your project, which is usually the right thing to do.
 You will be warned if your working area is dirty, as this is sometimes
 a mistake.
 
-=head2 git gerrit push [--keep] [--force] [--[no]rebase] [--draft] [--submit] [--base BASE] [--topic=TOPIC] [--reviewer USERS] [--cc USERS]
+=head2 git gerrit push OPTIONS*
 
 The C<push> sub-command should be invoked to push a change-branch to
 Gerrit's C<refs/for/> branch associated with its upstream branch. It
@@ -749,7 +749,7 @@ distribution, you can install some git-gerrit dependencies from
 packaged perl modules. These are the ones packaged with Ubuntu 12.04:
 
     sudo apt-get install -y \
-        libfile-slurp-perl liburi-encode-perl libhtml-tree-perl libjson-perl \
+        liburi-encode-perl libhtml-tree-perl libjson-perl \
         libscope-guard-perl libcrypt-ssleay-perl libwww-perl cpanminus
 
 The nifty C<cpanm> installer should take care of the remaining
@@ -764,7 +764,7 @@ distribution, you can install some git-gerrit dependencies from
 packaged perl modules. These are the ones packaged with CentOS 6.4:
 
     sudo yum install -y \
-        perl-File-Slurp perl-URI perl-HTML-Tree perl-JSON perl-Scope-Guard \
+        perl-URI perl-HTML-Tree perl-JSON perl-Scope-Guard \
         perl-Test-Exception perl-Test-use-ok perl-Crypt-SSLeay perl-YAML \
         perl-CPAN perl-ExtUtils-MakeMaker
 

@@ -18,10 +18,9 @@ BEGIN {
 }
 use open ':std', $encoding;
 
-$App::GitGerrit::VERSION = 'unreleased';
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.017';
+  $App::GitGerrit::VERSION = '0.020';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -466,26 +465,9 @@ sub update_branch {
     cmd "git fetch $remote $branch:$branch";
 }
 
-# The following change_branch_* routines are used to create, list, and
-# grok the local change-branches, i.e., the ones we create locally to
-# map Gerrit's changes. Their names have a fixed format like this:
-# "change/<upstream>/<id>. <Upstream> is the name of the local branch
-# from which this change was derived. <Id> can be either a number,
-# meaning the numeric id of a change already in Gerrit, or a
-# topic-name, which was created by the "git-gerrit new <topic>"
-# command.
-
-sub change_branch_new {
-    my ($upstream, $topic) = @_;
-    error "The TOPIC cannot contain the slash character (/)."
-        if $topic =~ m:/:;
-    return "change/$upstream/$topic";
-}
-
-sub change_branch_lists {
-    chomp(my @branches = map s/^\*?\s+//, qx/git branch --list 'change*'/);
-    return @branches;
-}
+# The change_branch_info routine receives the name of a branch. If
+# it's a change-branch, it returns a two-element list containing it's
+# upstream name and its id. Otherwise, it returns the empty list.
 
 sub change_branch_info {
     my ($branch) = @_;
@@ -495,20 +477,12 @@ sub change_branch_info {
     return;
 }
 
-# The current_change routine returns a list of two items: the upstream
-# and the id of the change branch we're currently in. If we're not in
-# a change branch, it returns the empty list.
-
-sub current_change {
-    return change_branch_info(current_branch);
-}
-
 # The current_change_id routine returns the id of the change branch
 # we're currently in. If we're not in a change branch, it returns
 # undef.
 
 sub current_change_id {
-    my ($branch, $id) = current_change;
+    my ($branch, $id) = change_branch_info(current_branch);
 
     return $id;
 }
@@ -655,6 +629,98 @@ $Commands{new} = sub {
     return;
 };
 
+$Commands{push} = sub {
+    $Options{rebase} = '';      # false by default
+    get_options(
+        'keep',
+        'force+',
+        'rebase!',
+        'draft',
+        'topic=s',
+        'submit',
+        'base=s',
+        'reviewer=s@',
+        'cc=s@'
+    );
+
+    my $branch = current_branch;
+
+    my ($upstream, $id) = change_branch_info($branch)
+        or error "$Command: You aren't in a change branch. I cannot push it.";
+
+    my $is_clean = qx/git status --porcelain --untracked-files=no/ eq '';
+
+    $is_clean or $Options{force}--
+            or error <<EOF;
+push: Can't push change because git-status is dirty.
+      If this is really what you want to do, please try again with --force.
+EOF
+
+    my @commits = qx/git log --decorate=no --oneline HEAD ^$upstream/;
+    if (@commits == 0) {
+        error "$Command: no changes between $upstream and $branch. Pushing would be pointless.";
+    } elsif (@commits > 1) {
+        error <<EOF unless $Options{force}--;
+push: you have more than one commit that you are about to push.
+      The outstanding commits are:
+
+ @commits
+      If this is really what you want to do, please try again with --force.
+EOF
+    }
+
+    # A --noverbose option sets $Options{rebase} to '0'.
+    if ($is_clean && ($Options{rebase} || $Options{rebase} eq '' && $id =~ /\D/)) {
+        update_branch($upstream)
+            or error "$Command: Non-fast-forward pull. Please, merge or rebase your branch first.";
+        cmd "git rebase $upstream"
+            or error "$Command: please resolve this 'git rebase $upstream' and try again.";
+    }
+
+    my $refspec = 'HEAD:refs/' . ($Options{draft} ? 'draft' : 'for') . "/$upstream";
+
+    my @tags;
+    if (my $topic = $Options{topic}) {
+        push @tags, "topic=$topic";
+    } elsif ($id =~ /\D/) {
+        push @tags, "topic=$id";
+    }
+
+    my @reviewers = auto_reviewers($upstream);
+    if (my $reviewers = $Options{reviewer}) {
+        push @reviewers, split(/,/, join(',', @$reviewers));
+    }
+    if (@reviewers) {
+        push @tags, map("r=$_", @reviewers);
+    }
+
+    if (my $ccs = $Options{cc}) {
+        push @tags, map("cc=$_", split(/,/, join(',', @$ccs)));
+    }
+    if ($Options{submit}) {
+        push @tags, 'submit';
+    }
+    if (my $base = $Options{base}) {
+        push @tags, "base=$base";
+    }
+    if (@tags) {
+        $refspec .= '%';
+        $refspec .= join(',', @tags);
+    }
+
+    my $remote = config('remote');
+    cmd "git push $remote $refspec"
+        or error "$Command: Error pushing change.";
+
+    if ($is_clean && ! $Options{keep}) {
+        cmd "git checkout $upstream" and cmd "git branch -D $branch";
+    }
+
+    install_commit_msg_hook;
+
+    return;
+};
+
 $Commands{query} = sub {
     get_options(
         'verbose',
@@ -786,22 +852,6 @@ EOF
     return;
 };
 
-$Commands{config} = sub {
-    my $config = grok_config;
-    my $git_gerrit = $config->{'git-gerrit'}
-        or return;
-    require Text::Table;
-    my $table = Text::Table->new();
-    foreach my $var (sort keys %$git_gerrit) {
-        foreach my $value (@{$git_gerrit->{$var}}) {
-            $table->add("git-gerrit.$var", $value);
-        }
-    }
-    print $table->table(), "\n";
-
-    return;
-};
-
 $Commands{checkout} = $Commands{co} = sub {
     get_options();
 
@@ -881,98 +931,6 @@ $Commands{'cherry-pick'} = $Commands{cp} = sub {
         or error "$Command: can't git fetch $url $ref";
 
     cmd join(' ', 'git cherry-pick', @ARGV, 'FETCH_HEAD');
-
-    return;
-};
-
-$Commands{push} = sub {
-    $Options{rebase} = '';      # false by default
-    get_options(
-        'keep',
-        'force+',
-        'rebase!',
-        'draft',
-        'topic=s',
-        'submit',
-        'base=s',
-        'reviewer=s@',
-        'cc=s@'
-    );
-
-    my $branch = current_branch;
-
-    my ($upstream, $id) = change_branch_info($branch)
-        or error "$Command: You aren't in a change branch. I cannot push it.";
-
-    my $is_clean = qx/git status --porcelain --untracked-files=no/ eq '';
-
-    $is_clean or $Options{force}--
-            or error <<EOF;
-push: Can't push change because git-status is dirty.
-      If this is really what you want to do, please try again with --force.
-EOF
-
-    my @commits = qx/git log --decorate=no --oneline HEAD ^$upstream/;
-    if (@commits == 0) {
-        error "$Command: no changes between $upstream and $branch. Pushing would be pointless.";
-    } elsif (@commits > 1) {
-        error <<EOF unless $Options{force}--;
-push: you have more than one commit that you are about to push.
-      The outstanding commits are:
-
- @commits
-      If this is really what you want to do, please try again with --force.
-EOF
-    }
-
-    # A --noverbose option sets $Options{rebase} to '0'.
-    if ($is_clean && ($Options{rebase} || $Options{rebase} eq '' && $id =~ /\D/)) {
-        update_branch($upstream)
-            or error "$Command: Non-fast-forward pull. Please, merge or rebase your branch first.";
-        cmd "git rebase $upstream"
-            or error "$Command: please resolve this 'git rebase $upstream' and try again.";
-    }
-
-    my $refspec = 'HEAD:refs/' . ($Options{draft} ? 'draft' : 'for') . "/$upstream";
-
-    my @tags;
-    if (my $topic = $Options{topic}) {
-        push @tags, "topic=$topic";
-    } elsif ($id =~ /\D/) {
-        push @tags, "topic=$id";
-    }
-
-    my @reviewers = auto_reviewers($upstream);
-    if (my $reviewers = $Options{reviewer}) {
-        push @reviewers, split(/,/, join(',', @$reviewers));
-    }
-    if (@reviewers) {
-        push @tags, map("r=$_", @reviewers);
-    }
-
-    if (my $ccs = $Options{cc}) {
-        push @tags, map("cc=$_", split(/,/, join(',', @$ccs)));
-    }
-    if ($Options{submit}) {
-        push @tags, 'submit';
-    }
-    if (my $base = $Options{base}) {
-        push @tags, "base=$base";
-    }
-    if (@tags) {
-        $refspec .= '%';
-        $refspec .= join(',', @tags);
-    }
-
-    my $remote = config('remote');
-    cmd "git push $remote $refspec"
-        or error "$Command: Error pushing change.";
-
-    if ($is_clean && ! $Options{keep}) {
-        cmd "git checkout $upstream" and cmd "git branch -D $branch";
-    }
-
-    install_commit_msg_hook;
 
     return;
 };
@@ -1184,6 +1142,22 @@ $Commands{web} = sub {
     cmd join(' ', qw/git web--browse/, @options, @urls);
 };
 
+$Commands{config} = sub {
+    my $config = grok_config;
+    my $git_gerrit = $config->{'git-gerrit'}
+        or return;
+    require Text::Table;
+    my $table = Text::Table->new();
+    foreach my $var (sort keys %$git_gerrit) {
+        foreach my $value (@{$git_gerrit->{$var}}) {
+            $table->add("git-gerrit.$var", $value);
+        }
+    }
+    print $table->table(), "\n";
+
+    return;
+};
+
 $Commands{version} = sub {
     print "Perl version $^V\n";
     print "git-gerrit version $App::GitGerrit::VERSION\n";
@@ -1221,7 +1195,7 @@ App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.017
+version 0.020
 
 =head1 SYNOPSIS
 

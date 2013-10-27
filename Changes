@@ -1,4 +1,27 @@
-Revision history for App::GitGerrit. -*- text -*-
+Revision history for Git::Gerrit. -*- text -*-
+
+0.020     2013-10-27 10:18:17 America/Sao_Paulo
+
+  [Changes]
+
+  - Rename Git::Gerrit back to App::GitGerrit. The CPAN indexing
+    problem is solved and it had nothing to do with the module's name.
+
+0.019     2013-10-27 09:22:27 America/Sao_Paulo
+
+  [Changes]
+
+  - Another attempt to solve the CPAN indexing problem.
+
+0.018     2013-10-26 16:48:30 America/Sao_Paulo
+
+  [Changes]
+
+  - Rename App::GitGerrit back to its original name: Git::Gerrit. This
+    is an attempt to bypass a problem that is preventing the module
+    from being indexed at CPAN.
+
+  - A few changes in the documentation.
 
 0.017     2013-10-22 08:52:14 America/Sao_Paulo
 
