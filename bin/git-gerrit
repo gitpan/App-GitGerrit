@@ -23,7 +23,7 @@ git-gerrit - Git extension to implement a Gerrit workflow
 
 =head1 VERSION
 
-version 0.020
+version 0.021
 
 =head1 SYNOPSIS
 
@@ -35,16 +35,17 @@ version 0.020
     git gerrit my          [--limit LIMIT] [--verbose] [changes|drafts|watched|starred]
     git gerrit show        CHANGE*
 
+    git gerrit fetch       CHANGE*
     git gerrit checkout    CHANGE*
     git gerrit upstream    [--keep]
-    git gerrit cherry-pick OPTIONS* CHANGE
+    git gerrit cherry-pick [--edit] [--no-commit] CHANGE*
 
-    git gerrit reviewer    [--add USERS] [--confirm] [--delete USERS] [CHANGE]
-    git gerrit review      [--message TEXT] [--keep] [[LABEL]=VOTE]* [CHANGE]
-    git gerrit abandon     [--message TEXT] [--keep] [CHANGE]
-    git gerrit restore     [--message TEXT] [CHANGE]
-    git gerrit revert      [--message TEXT] [CHANGE]
-    git gerrit submit      [--no-wait-for-merge] [--keep] [CHANGE]
+    git gerrit reviewer    [--add USERS] [--confirm] [--delete USERS] CHANGE*
+    git gerrit review      [--message TEXT] [--keep] [[LABEL]=VOTE]* CHANGE*
+    git gerrit abandon     [--message TEXT] [--keep] CHANGE*
+    git gerrit restore     [--message TEXT] CHANGE*
+    git gerrit revert      [--message TEXT] CHANGE*
+    git gerrit submit      [--no-wait-for-merge] [--keep] CHANGE*
 
     git gerrit web         [OPTIONS --] CHANGE*
 
@@ -154,10 +155,10 @@ we call a change-branch. We refer to BRANCH as the change-branch's
 C<upstream>, because it is the branch from which the change-branch
 derives and to which it will be ultimately merged back again.
 
-When C<git gerrit checkout CHANGE> fetches an existing change it
-creates a change-branch named B<change/BRANCH/ID>, where BRANCH is the
-name of the branch associated with the change, and ID is its legacy
-numeric change ID.
+When C<git gerrit fetch CHANGE> fetches an existing change it creates
+a change-branch named B<change/BRANCH/ID>, where BRANCH is the name of
+the branch associated with the change, and ID is its legacy numeric
+change ID.
 
 So, you should reserve the C<change/> top-level branch name for the
 change-branches managed by git-gerrit.
@@ -239,6 +240,37 @@ amending like this:
 
 Oh, and if you want to comment on the new patchset, you have to go to
 Gerrit's web interface again.
+
+=head2 Working on top of changes pending revision
+
+You normally should strive to push changes independent of each other,
+because it's a pain to amend a change which others depend upon,
+because you have a cascading rebase problem. However, sometimes you
+want to start work on top of some changes already pushed to Gerrit but
+that haven't been submitted yet. Git-gerrit's C<cherry-pick> command
+can help you here. Suppose you pushed two changes (e.g. 101 and 102)
+that you need to have integrated in order to start working on another
+change. You may create a new change and cherry-pick those two changes
+over it, creating a commit over which you can work. Like this:
+
+    git gerrit new topic master
+    git gerrit cherry-pick 101 102
+
+Now you can start working on a future change and make another
+commit. At the end, the C<change/master/topic> change-branch will
+have two commits. First the one created by the cherry-pick and then
+the one you created by yourself. You don't want to push it to Gerrit,
+though, while those changes are still being reviewed. When they're
+finally submitted, you can pull them to C<master>, rebase your
+change-branch on top of C<master> and push it to Gerrit. Like so:
+
+    git checkout master
+    git pull
+    git checkout change/master/topic
+    git rebase --onto master HEAD^
+    git gerrit push
+
+This will discard the commit created by the cherry-pick.
 
 =head1 SUB-COMMANDS
 
@@ -473,17 +505,25 @@ If no CHANGE is specified, the one associated with the current
 change-branch is described. If you're not in a change-branch, you'll
 get an error.
 
+=head2 git gerrit fetch CHANGE*
+
+The B<fetch> sub-command fetches one or more CHANGEs from Gerrit and
+creates change-branches pointing to them.
+
+A Gerrit change may contain a series of patch-sets. The C<fetch>
+sub-command fetches the current (latest) one. If there is already a
+change-branch for the change, it will be updated to the change's
+current patch-set.
+
+If you omit the CHANGE argument and you are in a change-branch, it
+will be updated with its current patch-set.
+
 =head2 git gerrit checkout CHANGE*
 
 The B<checkout> sub-command fetches one or more CHANGEs from Gerrit,
-creates change-branches pointing to them and checks out the last one.
-
-A Gerrit change may contain a series of patch-sets. The C<checkout>
-fetches the current (latest) one. If there is already a change-branch
-for the change, it will be updated to the change's current patch-set.
-
-If you omit the CHANGE argument and you are in a change-branch, it will
-be updated with its current patch-set.
+creates change-branches pointing to them, and checks out the last
+one. It's like invoking B<git gerrit fetch CHANGE> and then B<git
+checkout CHANGE-BRANCH>.
 
 The shorter name C<co> can also be used instead of C<checkout>.
 
@@ -511,29 +551,55 @@ both options are present the change-branch isn't deleted.
 
 =back
 
-=head2 git gerrit cherry-pick OPTIONS* CHANGE
+=head2 git gerrit cherry-pick [--edit] [--no-commit] CHANGE*
 
-The B<cherry-pick> sub-command fetches CHANGE from Gerrit and applies
-it to the current branch using the C<git cherry-pick> command. The
-CHANGE id is required and every OPTION (but --debug) is passed as-is
-to the C<git cherry-pick> command. You should read B<git-cherry-pick>
-manpage to know what options are available. Some of the most usefull
-ones are these: B<-e>, B<-x>, and B<-n>.
+The B<cherry-pick> sub-command invokes the B<fetch> sub-command to
+fetch a list of CHANGES from Gerrit and to create local
+change-branches for them. Then it applies all those changes to the
+current branch using the C<git cherry-pick> command.
+
+You may want to use this command to work on top of changes not
+submitted in Gerrit yet. You can cherry-pick them on top of a scratch
+branch and then continue to work on top of it while you wait for those
+changes to be reviewed.
 
 The shorter name C<cp> can also be used instead of C<cherry-pick>.
 
-=head2 git gerrit reviewer [--add USERS] [--confirm] [--delete USERS] [CHANGE]
+=over
+
+=item B<--edit>
+
+If specified, this option is passed to C<git cherry-pick> to let you
+edit the commit message.
+
+=item B<--no-commit>
+
+If specified, this option is passed to C<git cherry-pick> to avoid
+performing any commits.
+
+"This flag applies the changes necessary to cherry-pick each named
+commit to your working tree and the index, without making any
+commit. In addition, when this option is used, your index does not
+have to match the HEAD commit. The cherry-pick is done against the
+beginning state of your index.
+
+This is useful when cherry-picking more than one commits' effect to
+your index in a row."
+
+=back
+
+=head2 git gerrit reviewer [--add USERS] [--confirm] [--delete USERS] CHANGE*
 
 The B<reviewer> sub-command allows you to manage the list of reviewers
-for a CHANGE. You can omit the CHANGE argument if you're in a
-change-branch. In this case, you'll be managing the associated change
-reviewers.
+for one or more CHANGEs. You can omit the CHANGE argument if you're in
+a change-branch. In this case, you'll be managing the associated
+change reviewers.
 
 =over
 
 =item B<--add USERS>
 
-This option let's you invite new users to review the change. You can
+This option let's you invite new users to review the changes. You can
 pass a comma-separated list of users and even use more than one
 C<--add> option.
 
@@ -553,8 +619,8 @@ C<--confirm> option.
 
 =item B<--delete USERS>
 
-This option let's you remove reviewers from the change. You can pass a
-comma-separated list of users and even use more than one C<--delete>
+This option let's you remove reviewers from the changes. You can pass
+a comma-separated list of users and even use more than one C<--delete>
 option.
 
 You can use Gerrit groupnames in addition to usernames, if you want to
@@ -563,12 +629,15 @@ remove a group of reviewers.
 =back
 
 After adding and removing reviewers, C<git gerrit reviewers> shows the
-remaining list of reviewers of the CHANGE.
+remaining list of reviewers of the changes.
 
-=head2 git gerrit review [--message TEXT] [--keep] [[LABEL]=VOTE]* [CHANGE]
+=head2 git gerrit review [--message TEXT] [--keep] [[LABEL]=VOTE]* CHANGE*
 
-The B<review> sub-command allows you to review (duh!) a CHANGE by
-casting votes and adding messages to it.
+The B<review> sub-command allows you to review (duh!) one or more
+CHANGEs by casting votes and adding messages to them. If you want to
+be precise and add a message, you should be reviewing a single change
+at a time, but sometimes it's convenient to be able to cast the same
+vote to a set of changes.
 
 You can omit the CHANGE argument if you are in a change-branch, in
 which case you'll be reviewing the associated change. In this case,
@@ -599,10 +668,10 @@ This option avoids the change-branch deletion after a successful review.
 
 =back
 
-=head2 git gerrit submit [--no-wait-for-merge] [--keep] [CHANGE]
+=head2 git gerrit submit [--no-wait-for-merge] [--keep] CHANGE*
 
-The B<submit> sub-command submits an approved CHANGE, making Gerrit
-merge it into its remote upstream branch.
+The B<submit> sub-command submits one or more approved CHANGEs, making
+Gerrit merge them into their remote upstream branches.
 
 You can omit the CHANGE argument if you are in a change-branch, in
 which case you'll be submitting the associated change. In this case,
@@ -613,9 +682,9 @@ its upstream checked out.
 
 =item B<--no-wait-for-merge>
 
-By default git-gerrit will wait for the merge of the change into its
-branch to complete in Gerrit. This option tells it not to wait and
-finish as soon as it receives Gerrit's submit acknowledge.
+By default git-gerrit will wait for the merge of the changes into
+their branches to complete in Gerrit. This option tells it not to wait
+and finish as soon as it receives Gerrit's submit acknowledgement.
 
 =item B<--keep>
 
@@ -624,9 +693,9 @@ submission.
 
 =back
 
-=head2 git gerrit abandon [--message TEXT] [--keep] [CHANGE]
+=head2 git gerrit abandon [--message TEXT] [--keep] CHANGE*
 
-The B<abandon> sub-command abandons an unmerged CHANGE.
+The B<abandon> sub-command abandons one or more unmerged CHANGEs.
 
 You can omit the CHANGE argument if you are in a change-branch, in
 which case you'll be abandoning the associated change. In this case,
@@ -655,9 +724,9 @@ abandonment.
 
 =back
 
-=head2 git gerrit restore [--message TEXT] [CHANGE]
+=head2 git gerrit restore [--message TEXT] CHANGE*
 
-The B<restore> sub-command restores an abandoned CHANGE.
+The B<restore> sub-command restores one or more abandoned CHANGEs.
 
 You can omit the CHANGE argument if you are in a change-branch, in
 which case you'll be restoring the associated change.
@@ -675,11 +744,12 @@ invocation.
 
 =back
 
-=head2 git gerrit revert [--message TEXT] [CHANGE]
+=head2 git gerrit revert [--message TEXT] CHANGE*
 
-The B<revert> sub-command reverts an already merged CHANGE. Gerrit
-does so by creating, in the server, a new change with an inverted
-patch on top of the CHANGE remote upstream branch.
+The B<revert> sub-command reverts one or more already merged
+CHANGEs. Gerrit does so by creating, in the server, for each CHANGE, a
+new change with an inverted patch on top of the CHANGE remote upstream
+branch.
 
 You can omit the CHANGE argument if you are in a change-branch, in
 which case you'll be reverting the associated change.
