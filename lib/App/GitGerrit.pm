@@ -20,7 +20,7 @@ use open ':std', $encoding;
 
 package App::GitGerrit;
 {
-  $App::GitGerrit::VERSION = '0.021';
+  $App::GitGerrit::VERSION = '0.022';
 }
 # ABSTRACT: A container for functions for the git-gerrit program
 
@@ -539,7 +539,7 @@ sub auto_reviewers {
                             }
                         } else {
                             unless ($paths) {
-                                $paths = [qx/git diff --name-only HEAD ^$upstream/];
+                                $paths = [qx/git diff --name-only ${upstream}..HEAD/];
                                 chomp @$paths;
                             }
                             if ($op eq '=') {
@@ -670,7 +670,7 @@ push: Can't push change because git-status is dirty.
       If this is really what you want to do, please try again with --force.
 EOF
 
-    my @commits = qx/git log --decorate=no --oneline HEAD ^$upstream/;
+    my @commits = qx/git log --decorate=no --first-parent --oneline ${upstream}..HEAD/;
     if (@commits == 0) {
         error "$Command: no changes between $upstream and $branch. Pushing would be pointless.";
     } elsif (@commits > 1) {
@@ -683,8 +683,11 @@ push: you have more than one commit that you are about to push.
 EOF
     }
 
+    # Grok the list of parent commits to see if it's a merge commit.
+    my @parents = split / /, qx/git log --pretty='format:%p' -1/;
+
     # A --noverbose option sets $Options{rebase} to '0'.
-    if ($is_clean && ($Options{rebase} || $Options{rebase} eq '' && $id =~ /\D/)) {
+    if ($is_clean && (@parents < 2) && ($Options{rebase} || $Options{rebase} eq '' && $id =~ /\D/)) {
         update_branch($upstream)
             or error "$Command: Non-fast-forward pull. Please, merge or rebase your branch first.";
         cmd "git rebase $upstream"
@@ -952,6 +955,16 @@ $Commands{'cherry-pick'} = $Commands{cp} = sub {
     return;
 };
 
+$Commands{rebase} = sub {
+    get_options();
+
+    my ($upstream, $id) = change_branch_info(current_branch)
+        or error "$Command: You must be in a change branch to invoke rebase.";
+
+    cmd "git rebase $upstream"
+        or error "$Command: please resolve this 'git rebase $upstream' and try again.";
+};
+
 $Commands{reviewer} = sub {
     get_options(
         'add=s@',
@@ -1192,13 +1205,15 @@ __END__
 
 =pod
 
+=encoding UTF-8
+
 =head1 NAME
 
 App::GitGerrit - A container for functions for the git-gerrit program
 
 =head1 VERSION
 
-version 0.021
+version 0.022
 
 =head1 SYNOPSIS
 

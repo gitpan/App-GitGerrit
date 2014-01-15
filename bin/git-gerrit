@@ -17,13 +17,15 @@ __END__
 
 =pod
 
+=encoding UTF-8
+
 =head1 NAME
 
 git-gerrit - Git extension to implement a Gerrit workflow
 
 =head1 VERSION
 
-version 0.021
+version 0.022
 
 =head1 SYNOPSIS
 
@@ -37,8 +39,10 @@ version 0.021
 
     git gerrit fetch       CHANGE*
     git gerrit checkout    CHANGE*
-    git gerrit upstream    [--keep]
+    git gerrit upstream    [--keep] [--delete]
     git gerrit cherry-pick [--edit] [--no-commit] CHANGE*
+
+    git gerrit rebase
 
     git gerrit reviewer    [--add USERS] [--confirm] [--delete USERS] CHANGE*
     git gerrit review      [--message TEXT] [--keep] [[LABEL]=VOTE]* CHANGE*
@@ -88,8 +92,6 @@ which was consolidated in its version 2.6. As this API matures, expect
 git-gerrit to incorporate new functionality.
 
 There are a few alternatives to git-gerrit described L<below|/"SEE ALSO">.
-
-=encoding utf8
 
 =head1 GLOSSARY
 
@@ -368,8 +370,7 @@ amend them later, having multiple commits may require rebasing
 dependent commits, which is a more complex operation and clutters the
 review history of the change.
 
-If git status isn't clean, the change-branch isn't rebased and the
-upstream isn't checked out.
+If git status isn't clean, the the upstream isn't checked out.
 
 =item B<--[no]rebase>
 
@@ -379,10 +380,13 @@ upstream. This is to make sure you're pushing a change based on the
 newest project state. If, by any reason, you don't want to have it
 rebased, use the C<--norebase> option.
 
-A change-branch that has been checked out (one ending in an ID) 't
+A change-branch that has been checked out (one ending in an ID) isn't
 rebased by default, because this would clutter the change review
 history in Gerrit. If you want it rebased nonetheless, use the
 C<--rebase> option.
+
+If git status isn't clean or if the commit being pushed is a merge
+commit it's not rebased.
 
 =item B<--draft>
 
@@ -587,6 +591,16 @@ This is useful when cherry-picking more than one commits' effect to
 your index in a row."
 
 =back
+
+=head2 git gerrit rebase
+
+The B<rebase> sub-command simply rebases the current change-branch
+onto its upstream. It's a shortcut for C<git rebase UPSTREAM> but
+arguably easier because you don't have to remember the upstream's
+name.
+
+An error message is produced if it's invoked when HEAD isn't pointing
+to a change-branch.
 
 =head2 git gerrit reviewer [--add USERS] [--confirm] [--delete USERS] CHANGE*
 
